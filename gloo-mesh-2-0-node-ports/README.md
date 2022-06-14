@@ -1098,11 +1098,13 @@ spec:
   - name: cluster1
     namespaces:
     - name: istio-gateways
-    - name: gloo-mesh-addons
+    # uncomment if gloo-mesh-addons are deployed
+    #- name: gloo-mesh-addons
   - name: cluster2
     namespaces:
     - name: istio-gateways
-    - name: gloo-mesh-addons
+    # uncomment if gloo-mesh-addons are deployed
+    #- name: gloo-mesh-addons
 EOF
 ```
 
