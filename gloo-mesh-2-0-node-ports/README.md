@@ -26,9 +26,10 @@ source ./scripts/assert.sh
 * [Lab 10 - Create the Root Trust Policy](#Lab-10)
 * [Lab 11 - Multi-cluster Traffic](#Lab-11)
 * [Lab 12 - Leverage Virtual Destinations](#Lab-12)
-* [Lab 13 - Zero trust](#Lab-13)
-* [Lab 14 - Create the httpbin workspace](#Lab-14)
-* [Lab 15 - Expose an external service](#Lab-15)
+* [Lab 13 - Deploy sleep containers for zero-trust lab](#Lab-13)
+* [Lab 14 - Zero trust](#Lab-14)
+* [Lab 15 - Create the httpbin workspace](#Lab-15)
+* [Lab 16 - Expose an external service](#Lab-16)
 
 
 
@@ -948,6 +949,26 @@ helm upgrade --install gloo-mesh-agent gloo-mesh-agent/gloo-mesh-agent \
 
 You can check the cluster(s) have been registered correctly using the following commands:
 
+Method #1: Port-forward to gloo-mesh-mgmt-server admin page
+
+In the terminal, run the port-forward command below to expose the metrics endpoint
+```
+kubectl port-forward -n gloo-mesh --context ${MGMT} deploy/gloo-mesh-mgmt-server 9091
+```
+
+In your browser, connect to http://localhost:9091/metrics
+
+In the metrics UI, look for the following lines. If the values are 1, the agents in the workload clusters are successfully registered with the management server. If the values are 0, the agents are not successfully connected.
+```
+relay_pull_clients_connected{cluster="cluster1"} 1
+relay_pull_clients_connected{cluster="cluster2"} 1
+# HELP relay_push_clients_connected Current number of connected Relay push clients (Relay Agents).
+# TYPE relay_push_clients_connected gauge
+relay_push_clients_connected{cluster="cluster1"} 1
+relay_push_clients_connected{cluster="cluster2"} 1
+```
+
+Method #2: With Ephemeral Containers feature-flag enabled:
 ```
 pod=$(kubectl --context ${MGMT} -n gloo-mesh get pods -l app=gloo-mesh-mgmt-server -o jsonpath='{.items[0].metadata.name}')
 kubectl --context ${MGMT} -n gloo-mesh debug -q -i ${pod} --image=curlimages/curl -- curl -s http://localhost:9091/metrics | grep relay_push_clients_connected
@@ -961,6 +982,22 @@ You should get an output similar to this:
 relay_push_clients_connected{cluster="cluster1"} 1
 relay_push_clients_connected{cluster="cluster2"} 1
 ```
+
+Method #3: Visualize in the UI
+
+To open a port-forward to the Gloo Mesh UI you can either use `meshctl` or `kubectl` commands
+
+meshctl:
+```
+meshctl dashboard --kubecontext ${MGMT}
+```
+
+kubectl:
+```
+kubectl port-forward -n gloo-mesh svc/gloo-mesh-ui 8090 --context ${MGMT}
+```
+
+If agents were successfully registered, you should see information in the Clusters section of the Overview page.
 
 <!--bash
 cat <<'EOF' > ./test.js
@@ -2382,9 +2419,130 @@ kubectl --context ${CLUSTER1} -n bookinfo-frontends delete failoverpolicy failov
 kubectl --context ${CLUSTER1} -n bookinfo-frontends delete outlierdetectionpolicy outlier-detection
 ```
 
+## Lab 13 - Deploy sleep containers for zero-trust lab <a name="Lab-13"></a>
+If you do not have ephemeral containers feature flag turned on, we can replace the functionality with the sleep demo app
+
+Run the following commands to deploy the sleep app on `cluster1` twice
+
+The first version will be called `sleep-not-in-mesh` and won't have the sidecar injected (because we don't label the namespace).
+```bash
+kubectl --context ${CLUSTER1} create ns sleep
+
+kubectl --context ${CLUSTER1} apply -n sleep -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sleep-not-in-mesh
+  namespace: sleep
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sleep-not-in-mesh
+  namespace: sleep
+  labels:
+    app: sleep-not-in-mesh
+    service: sleep-not-in-mesh
+spec:
+  ports:
+  - port: 80
+    name: http
+  selector:
+    app: sleep-not-in-mesh
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sleep-not-in-mesh
+  namespace: sleep
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sleep-not-in-mesh
+  template:
+    metadata:
+      labels:
+        app: sleep-not-in-mesh
+    spec:
+      terminationGracePeriodSeconds: 0
+      serviceAccountName: sleep-not-in-mesh
+      containers:
+      - name: sleep
+        image: curlimages/curl
+        command: ["/bin/sleep", "3650d"]
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - mountPath: /etc/sleep-not-in-mesh/tls
+          name: secret-volume
+      volumes:
+      - name: secret-volume
+        secret:
+          secretName: sleep-not-in-mesh-secret
+          optional: true
+EOF
+```
+
+The second version will be called sleep-in-mesh and will have the sidecar injected (because of the label istio.io/rev in the Pod template).
+```bash
+kubectl --context ${CLUSTER1} apply -n sleep -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sleep-in-mesh
+  namespace: sleep
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sleep-in-mesh
+  namespace: sleep
+  labels:
+    app: sleep-in-mesh
+    service: sleep-in-mesh
+spec:
+  ports:
+  - port: 80
+    name: http
+  selector:
+    app: sleep-in-mesh
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sleep-in-mesh
+  namespace: sleep
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sleep-in-mesh
+  template:
+    metadata:
+      labels:
+        app: sleep-in-mesh
+        istio.io/rev: 1-13
+    spec:
+      terminationGracePeriodSeconds: 0
+      serviceAccountName: sleep-in-mesh
+      containers:
+      - name: sleep
+        image: curlimages/curl
+        command: ["/bin/sleep", "3650d"]
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - mountPath: /etc/sleep-in-mesh/tls
+          name: secret-volume
+      volumes:
+      - name: secret-volume
+        secret:
+          secretName: sleep-in-mesh-secret
+          optional: true
+EOF
+```
 
 
-## Lab 13 - Zero trust <a name="Lab-13"></a>
+## Lab 14 - Zero trust <a name="Lab-14"></a>
 
 In the previous step, we federated multiple meshes and established a shared root CA for a shared identity domain.
 
@@ -2397,6 +2555,12 @@ Let's validate this.
 
 Run the following commands to initiate a communication from a service which isn't in the mesh to a service which is in the mesh:
 
+With Sleep App:
+```
+kubectl exec -it -n sleep deploy/sleep-not-in-mesh -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
+```
+
+With Ephemeral Containers:
 ```
 pod=$(kubectl --context ${CLUSTER1} -n httpbin get pods -l app=not-in-mesh -o jsonpath='{.items[0].metadata.name}')
 kubectl --context ${CLUSTER1} -n httpbin debug -i -q ${pod} --image=curlimages/curl -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
@@ -2423,6 +2587,12 @@ mocha ./test.js --timeout 5000 --retries=50 --bail 2> /dev/null || exit 1
 
 Run the following commands to initiate a communication from a service which is in the mesh to another service which is in the mesh:
 
+With Sleep App:
+```
+kubectl exec -it -n sleep deploy/sleep-in-mesh -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
+```
+
+With Ephemeral Containers:
 ```
 pod=$(kubectl --context ${CLUSTER1} -n httpbin get pods -l app=in-mesh -o jsonpath='{.items[0].metadata.name}')
 kubectl --context ${CLUSTER1} -n httpbin debug -i -q ${pod} --image=curlimages/curl -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
@@ -2449,7 +2619,16 @@ You should get a `200` response code again.
 
 To enfore a zero trust policy, it shouldn't be the case.
 
-We'll leverage the Gloo Mesh workspaces to get to a state where:
+If you run the commands below, you will find that no `PeerAuthentication`, `AuthorizationPolicy`, or `Sidecars` have been configured to enforce zero trust.
+```
+kubectl get PeerAuthentication -A --context ${CLUSTER1}
+kubectl get AuthorizationPolicy -A --context ${CLUSTER1}
+kubectl get Sidecars -A --context ${CLUSTER1}
+```
+
+When running these commands you should see an output that says `No resources found`. This is expected
+
+Now we'll leverage the Gloo Mesh workspaces to get to a state where:
 
 - communications between services which are in the mesh and others which aren't in the mesh aren't allowed anymore
 - communications between services in the mesh are allowed only when services are in the same workspace or when their workspaces have import/export rules.
@@ -2489,14 +2668,100 @@ spec:
 EOF
 ```
 
-When service isolation is enabled, Gloo Mesh creates the corresponding Istio `AuthorizationPolicy` and `PeerAuthentication` objects to enforce zero trust.
+When service isolation is enabled, Gloo Mesh creates the corresponding Istio `AuthorizationPolicy` and `PeerAuthentication` objects, as well as configures the `Sidecar` objects to enforce zero trust.
 
 When `trimProxyConfig` is set to `true`, Gloo Mesh also creates the corresponding Istio `Sidecar` objects to program the sidecar proxies to only know how to talk to the authorized services.
+
+To validate this, run the commands below:
+```
+kubectl get PeerAuthentication -A --context ${CLUSTER1}
+kubectl get AuthorizationPolicy -A --context ${CLUSTER1}
+kubectl get Sidecars -A --context ${CLUSTER1}
+```
+
+To dig in deeper, you can run a `kubectl get <resource> -n <namespace> -o yaml` to see more details on what Gloo Mesh is doing under the hood
+
+For example:
+```
+kubectl get AuthorizationPolicy -n bookinfo-frontends settings-productpage-9080-bookinfo -o yaml
+```
+
+Will yield the AuthorizationPolicy that was automatically generated by Gloo Mesh when workspace isolation was turned on:
+```
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  creationTimestamp: "2022-06-14T20:40:44Z"
+  generation: 1
+  labels:
+    agent.gloo.solo.io: gloo-mesh
+    cluster.multicluster.solo.io: ""
+    context.mesh.gloo.solo.io/cluster: cluster1
+    context.mesh.gloo.solo.io/namespace: bookinfo-frontends
+    context.mesh.gloo.solo.io/workspace: bookinfo
+    gloo.solo.io/parent_cluster: cluster1
+    gloo.solo.io/parent_group: ""
+    gloo.solo.io/parent_kind: Service
+    gloo.solo.io/parent_name: productpage
+    gloo.solo.io/parent_namespace: bookinfo-frontends
+    gloo.solo.io/parent_version: v1
+    owner.gloo.solo.io/name: gloo-mesh
+    reconciler.mesh.gloo.solo.io/name: translator
+    relay.solo.io/cluster: cluster1
+  name: settings-productpage-9080-bookinfo
+  namespace: bookinfo-frontends
+  resourceVersion: "9799"
+  uid: 23499fc1-c1fe-49b5-8a84-ca454214d99d
+spec:
+  rules:
+  - from:
+    - source:
+        principals:
+        - cluster1/ns/bookinfo-backends/sa/bookinfo-details
+        - cluster1/ns/bookinfo-backends/sa/bookinfo-ratings
+        - cluster1/ns/bookinfo-backends/sa/bookinfo-reviews
+        - cluster1/ns/bookinfo-backends/sa/default
+        - cluster1/ns/bookinfo-frontends/sa/bookinfo-productpage
+        - cluster1/ns/bookinfo-frontends/sa/default
+        - cluster2/ns/bookinfo-backends/sa/bookinfo-details
+        - cluster2/ns/bookinfo-backends/sa/bookinfo-ratings
+        - cluster2/ns/bookinfo-backends/sa/bookinfo-reviews
+        - cluster2/ns/bookinfo-backends/sa/default
+        - cluster2/ns/bookinfo-frontends/sa/bookinfo-productpage
+        - cluster2/ns/bookinfo-frontends/sa/default
+    - source:
+        principals:
+        - cluster1/ns/gloo-mesh-addons/sa/default
+        - cluster1/ns/gloo-mesh-addons/sa/ext-auth-service
+        - cluster1/ns/gloo-mesh-addons/sa/rate-limiter
+        - cluster1/ns/istio-gateways/sa/default
+        - cluster1/ns/istio-gateways/sa/istio-eastwestgateway
+        - cluster1/ns/istio-gateways/sa/istio-ingressgateway
+        - cluster2/ns/gloo-mesh-addons/sa/default
+        - cluster2/ns/gloo-mesh-addons/sa/ext-auth-service
+        - cluster2/ns/gloo-mesh-addons/sa/rate-limiter
+        - cluster2/ns/istio-gateways/sa/default
+        - cluster2/ns/istio-gateways/sa/istio-eastwestgateway
+        - cluster2/ns/istio-gateways/sa/istio-ingressgateway
+    to:
+    - operation:
+        ports:
+        - "9080"
+  selector:
+    matchLabels:
+      app: productpage
+```
 
 If you refresh the browser, you'll see that the bookinfo application is still exposed and working correctly.
 
 Run the following commands to initiate a communication from a service which isn't in the mesh to a service which is in the mesh:
 
+With Sleep App:
+```
+kubectl exec -it -n sleep deploy/sleep-not-in-mesh -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
+```
+
+With Ephemeral Containers:
 ```
 pod=$(kubectl --context ${CLUSTER1} -n httpbin get pods -l app=not-in-mesh -o jsonpath='{.items[0].metadata.name}')
 kubectl --context ${CLUSTER1} -n httpbin debug -i -q ${pod} --image=curlimages/curl -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
@@ -2523,6 +2788,12 @@ mocha ./test.js --timeout 5000 --retries=50 --bail 2> /dev/null || exit 1
 
 Run the following commands to initiate a communication from a service which is in the mesh to another service which is in the mesh:
 
+With Sleep App:
+```
+kubectl exec -it -n sleep deploy/sleep-in-mesh -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
+```
+
+With Ephemeral Containers:
 ```
 pod=$(kubectl --context ${CLUSTER1} -n httpbin get pods -l app=in-mesh -o jsonpath='{.items[0].metadata.name}')
 kubectl --context ${CLUSTER1} -n httpbin debug -i -q ${pod} --image=curlimages/curl -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
@@ -2551,7 +2822,7 @@ You've achieved zero trust with nearly no effort.
 
 
 
-## Lab 14 - Create the httpbin workspace <a name="Lab-14"></a>
+## Lab 15 - Create the httpbin workspace <a name="Lab-15"></a>
 
 We're going to create a workspace for the team in charge of the httpbin application.
 
@@ -2610,7 +2881,7 @@ The Httpbin team has decided to export the following to the `gateway` workspace 
 
 
 
-## Lab 15 - Expose an external service <a name="Lab-15"></a>
+## Lab 16 - Expose an external service <a name="Lab-16"></a>
 
 In this step, we're going to expose an external service through a Gateway using Gloo Mesh and show how we can then migrate this service to the Mesh.
 
