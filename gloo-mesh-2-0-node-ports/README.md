@@ -28,8 +28,9 @@ source ./scripts/assert.sh
 * [Lab 12 - Leverage Virtual Destinations](#Lab-12)
 * [Lab 13 - Deploy sleep containers for zero-trust lab](#Lab-13)
 * [Lab 14 - Zero trust](#Lab-14)
-* [Lab 15 - Create the httpbin workspace](#Lab-15)
-* [Lab 16 - Expose an external service](#Lab-16)
+* [Lab 15 - Exploring Istio, Envoy Proxy Config, and Metrics](#Lab-15)
+* [Lab 16 - Create the httpbin workspace](#Lab-16)
+* [Lab 17 - Expose an external service](#Lab-17)
 
 
 
@@ -1559,7 +1560,7 @@ kubectl --context ${CLUSTER1} -n bookinfo-backends delete routetable reviews
 
 To allow secured (end-to-end mTLS) cross cluster communications, we need to make sure the certificates issued by the Istio control plance on each cluster are signed with intermediate certificates which have a common root CA.
 
-Gloo Mesh fully automates this process.
+Gloo Mesh automates this process.
 
 Run this command to see how the communication between microservices occurs currently:
 
@@ -1629,8 +1630,8 @@ Creating a Root Trust Policy will unify these two CAs with a common root identit
 
 Run the following command to create the *Root Trust Policy*:
 
-
-
+### Using Automatically Generated Self-Signed For Testing and POC Environments
+Gloo Mesh can automatically generate and issue new Istio Signing CAs with a shared root to all registered clusters with the config below. Useful for quick POCs where a self-signed cert can be used.
 ```bash
 cat << EOF | kubectl --context ${MGMT} apply -f -
 apiVersion: admin.gloo.solo.io/v2
@@ -1659,6 +1660,46 @@ Gloo Mesh will then sign the intermediate certificates with the Root certificate
 At that point, we want Istio to pick up the new intermediate CA and start using that for its workloads. To do that Gloo Mesh creates a Kubernetes secret called `cacerts` in the `istio-system` namespace.
 
 You can have a look at the Istio documentation [here](https://istio.io/latest/docs/tasks/security/cert-management/plugin-ca-cert) if you want to get more information about this process.
+
+### Create Root and Intermediate Root Certificates
+Additionally, Gloo Mesh can take a Root CA in the form of a Kubernetes Secret. Here we will go through the exercise of
+- Generate Root Certificate
+- Generate Istio signing CA
+- Create and sign gloo mesh istio intermediate signing ca
+- Create cert chain
+- Upload istio signing ca to gloo mesh mgmt plane
+
+A useful script to do this exists in the `tools` directory
+```
+cd ../tools
+generate-istio-signing-ca.sh
+```
+
+Note: be sure to change the `MGMT_CONTEXT=mgmt` variable in the script above if your context is named differently
+
+
+Validate that the `gloo-mesh-istio-signing-ca` secret was created
+```
+kubectl get secrets -n gloo-mesh --context ${MGMT}
+```
+
+Now you can deploy the `RootTrustPolicy` that is referencing this Intermediate Root Signing CA
+```bash
+cat << EOF | kubectl --context ${MGMT} apply -f -
+apiVersion: admin.gloo.solo.io/v2
+kind: RootTrustPolicy
+metadata:
+  name: root-trust-policy
+  namespace: gloo-mesh
+spec:
+  config:
+    autoRestartPods: true
+    mgmtServerCa:
+      secretRef:
+        name: gloo-mesh-istio-signing-ca
+        namespace: gloo-mesh
+EOF
+```
 
 Check that the secret containing the new Istio CA has been created in the istio namespace, on the first cluster:
 
@@ -1889,6 +1930,9 @@ The first certificate is the certificate of the service. Let's decrypt it.
 Copy and paste the content of the certificate (including the BEGIN and END CERTIFICATE lines) in a new file called `/tmp/cert` and run the following command:
 
 ```
+kubectl --context ${CLUSTER1} exec -t -n bookinfo-backends deploy/reviews-v1 \
+-- openssl s_client -showcerts -connect ratings:9080 -alpn istio > /tmp/cert
+
 openssl x509 -in /tmp/cert -text
 ```
 
@@ -1938,13 +1982,16 @@ We also need to make sure we restart our `in-mesh` deployment because it's not y
 kubectl --context ${CLUSTER1} -n httpbin rollout restart deploy/in-mesh
 ```
 
-
-
 ## Lab 11 - Multi-cluster Traffic <a name="Lab-11"></a>
 
 On the first cluster, the `v3` version of the `reviews` microservice doesn't exist, but we can use Gloo Mesh to explicitly direct all the traffic to the `v3` version of the second cluster.
 
 To do that, the Bookinfo team must update the `WorkspaceSettings` to discover all the `reviews` services and to make them available from any cluster.
+
+Before doing so, you should take note of what Gloo Mesh is doing under the hood. First take a look at the existing serviceentries, we should expect to not see any output
+```
+kubectl get serviceentries -A --context {CLUSTER1}
+```
 
 ```bash
 cat << EOF | kubectl --context ${CLUSTER1} apply -f -
@@ -1984,6 +2031,9 @@ EOF
 ```
 
 Gloo Mesh will discover the remote services and create the corresponding Istio `ServiceEntries` to make them available.
+```
+kubectl get serviceentries -A --context {CLUSTER1}
+```
 
 After that, you need to create a `RouteTable` to send all the traffic to the `v3` version of the `reviews` service running on the second cluster.
 
@@ -2822,9 +2872,1336 @@ You should get a `403` response code which means that the sidecar proxy of the `
 
 You've achieved zero trust with nearly no effort.
 
+## Lab 15 - Exploring Istio, Envoy Proxy Config, and Metrics <a name="Lab-15"></a>
+(Will clean this section up more later)
+
+## Get an overview of your mesh
+```
+istioctl proxy-status
+```
+
+Example output
+```
+% istioctl proxy-status
+NAME                                                       CLUSTER     CDS        LDS        EDS        RDS          ECDS         ISTIOD                           VERSION
+details-v1-597f86fbdf-6wz97.bookinfo-backends-foo          mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+ext-auth-service-68b64b4886-lkw5t.gloo-mesh-addons         mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+gloo-mesh-ui-5ccf6f44cc-gbjhn.gloo-mesh                    mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+in-mesh-755d9df68b-gm769.httpbin                           mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+istio-eastwestgateway-65664978cf-zz9x7.istio-gateways      mgmt        SYNCED     SYNCED     SYNCED     NOT SENT     NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+istio-ingressgateway-5d85f95f97-9kmb7.istio-gateways       mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+productpage-v1-5f47bdf77b-5mstx.bookinfo-frontends-foo     mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+rate-limiter-5d76cffd58-wqbsk.gloo-mesh-addons             mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+ratings-v1-bd7dc5bf7-j4ctx.bookinfo-backends-foo           mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+redis-578865fd78-tj6dw.gloo-mesh-addons                    mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+reviews-v1-58f99b554c-bcqbl.bookinfo-backends-foo          mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+reviews-v2-57459866f5-gbpzt.bookinfo-backends-foo          mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+svclb-istio-eastwestgateway-shmm4.istio-gateways           mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+svclb-istio-ingressgateway-t89xr.istio-gateways            mgmt        SYNCED     SYNCED     SYNCED     SYNCED       NOT SENT     istiod-1-13-7c669c66d4-pj5jb     1.13.4-solo
+```
+
+## Retrief diffs between Envoy and Istiod
+```
+% istioctl proxy-status productpage-v1-5f47bdf77b-5mstx -n bookinfo-frontends-foo
+Clusters Match
+Listeners Match
+Routes Match (RDS last loaded at Tue, 14 Jun 2022 20:43:02 PDT)
+```
+
+## grab envoy stats of sidecar using istioctl
+```
+istioctl experimental envoy-stats <pod> --namespace <namespace> 
+```
+
+Example:
+```
+$ istioctl experimental envoy-stats --namespace bookinfo-frontends-foo productpage-v1-5f47bdf77b-5mstx
+cluster_manager.cds.version_text: "2022-06-15T03:43:37Z/29"
+listener_manager.lds.version_text: "2022-06-15T03:43:37Z/29"
+cluster.xds-grpc.assignment_stale: 0
+cluster.xds-grpc.assignment_timeout_received: 0
+cluster.xds-grpc.bind_errors: 0
+cluster.xds-grpc.circuit_breakers.default.cx_open: 0
+cluster.xds-grpc.circuit_breakers.default.cx_pool_open: 0
+cluster.xds-grpc.circuit_breakers.default.rq_open: 0
+cluster.xds-grpc.circuit_breakers.default.rq_pending_open: 0
+cluster.xds-grpc.circuit_breakers.default.rq_retry_open: 0
+cluster.xds-grpc.circuit_breakers.high.cx_open: 0
+cluster.xds-grpc.circuit_breakers.high.cx_pool_open: 0
+cluster.xds-grpc.circuit_breakers.high.rq_open: 0
+cluster.xds-grpc.circuit_breakers.high.rq_pending_open: 0
+cluster.xds-grpc.circuit_breakers.high.rq_retry_open: 0
+cluster.xds-grpc.default.total_match_count: 1
+cluster.xds-grpc.http2.dropped_headers_with_underscores: 0
+cluster.xds-grpc.http2.header_overflow: 0
+cluster.xds-grpc.http2.headers_cb_no_stream: 0
+cluster.xds-grpc.http2.inbound_empty_frames_flood: 0
+cluster.xds-grpc.http2.inbound_priority_frames_flood: 0
+cluster.xds-grpc.http2.inbound_window_update_frames_flood: 0
+cluster.xds-grpc.http2.keepalive_timeout: 0
+cluster.xds-grpc.http2.metadata_empty_frames: 0
+cluster.xds-grpc.http2.outbound_control_flood: 0
+cluster.xds-grpc.http2.outbound_flood: 0
+cluster.xds-grpc.http2.pending_send_bytes: 0
+cluster.xds-grpc.http2.requests_rejected_with_underscores_in_headers: 0
+cluster.xds-grpc.http2.rx_messaging_error: 0
+cluster.xds-grpc.http2.rx_reset: 0
+cluster.xds-grpc.http2.stream_refused_errors: 0
+cluster.xds-grpc.http2.streams_active: 1
+cluster.xds-grpc.http2.trailers: 0
+cluster.xds-grpc.http2.tx_flush_timeout: 0
+cluster.xds-grpc.http2.tx_reset: 0
+cluster.xds-grpc.internal.upstream_rq_200: 1
+cluster.xds-grpc.internal.upstream_rq_2xx: 1
+cluster.xds-grpc.internal.upstream_rq_completed: 1
+cluster.xds-grpc.lb_healthy_panic: 0
+cluster.xds-grpc.lb_local_cluster_not_ok: 0
+cluster.xds-grpc.lb_recalculate_zone_structures: 0
+cluster.xds-grpc.lb_subsets_active: 0
+cluster.xds-grpc.lb_subsets_created: 0
+cluster.xds-grpc.lb_subsets_fallback: 0
+cluster.xds-grpc.lb_subsets_fallback_panic: 0
+cluster.xds-grpc.lb_subsets_removed: 0
+cluster.xds-grpc.lb_subsets_selected: 0
+cluster.xds-grpc.lb_zone_cluster_too_small: 0
+cluster.xds-grpc.lb_zone_no_capacity_left: 0
+cluster.xds-grpc.lb_zone_number_differs: 0
+cluster.xds-grpc.lb_zone_routing_all_directly: 0
+cluster.xds-grpc.lb_zone_routing_cross_zone: 0
+cluster.xds-grpc.lb_zone_routing_sampled: 0
+cluster.xds-grpc.max_host_weight: 0
+cluster.xds-grpc.membership_change: 1
+cluster.xds-grpc.membership_degraded: 0
+cluster.xds-grpc.membership_excluded: 0
+cluster.xds-grpc.membership_healthy: 1
+cluster.xds-grpc.membership_total: 1
+cluster.xds-grpc.original_dst_host_invalid: 0
+cluster.xds-grpc.retry_or_shadow_abandoned: 0
+cluster.xds-grpc.update_attempt: 0
+cluster.xds-grpc.update_empty: 0
+cluster.xds-grpc.update_failure: 0
+cluster.xds-grpc.update_no_rebuild: 0
+cluster.xds-grpc.update_success: 0
+cluster.xds-grpc.upstream_cx_active: 1
+cluster.xds-grpc.upstream_cx_close_notify: 0
+cluster.xds-grpc.upstream_cx_connect_attempts_exceeded: 0
+cluster.xds-grpc.upstream_cx_connect_fail: 0
+cluster.xds-grpc.upstream_cx_connect_timeout: 0
+cluster.xds-grpc.upstream_cx_destroy: 0
+cluster.xds-grpc.upstream_cx_destroy_local: 0
+cluster.xds-grpc.upstream_cx_destroy_local_with_active_rq: 0
+cluster.xds-grpc.upstream_cx_destroy_remote: 0
+cluster.xds-grpc.upstream_cx_destroy_remote_with_active_rq: 0
+cluster.xds-grpc.upstream_cx_destroy_with_active_rq: 0
+cluster.xds-grpc.upstream_cx_http1_total: 0
+cluster.xds-grpc.upstream_cx_http2_total: 1
+cluster.xds-grpc.upstream_cx_http3_total: 0
+cluster.xds-grpc.upstream_cx_idle_timeout: 0
+cluster.xds-grpc.upstream_cx_max_duration_reached: 0
+cluster.xds-grpc.upstream_cx_max_requests: 1
+cluster.xds-grpc.upstream_cx_none_healthy: 0
+cluster.xds-grpc.upstream_cx_overflow: 0
+cluster.xds-grpc.upstream_cx_pool_overflow: 0
+cluster.xds-grpc.upstream_cx_protocol_error: 0
+cluster.xds-grpc.upstream_cx_rx_bytes_buffered: 17
+cluster.xds-grpc.upstream_cx_rx_bytes_total: 2782690
+cluster.xds-grpc.upstream_cx_total: 1
+cluster.xds-grpc.upstream_cx_tx_bytes_buffered: 0
+cluster.xds-grpc.upstream_cx_tx_bytes_total: 69983
+cluster.xds-grpc.upstream_flow_control_backed_up_total: 0
+cluster.xds-grpc.upstream_flow_control_drained_total: 0
+cluster.xds-grpc.upstream_flow_control_paused_reading_total: 0
+cluster.xds-grpc.upstream_flow_control_resumed_reading_total: 0
+cluster.xds-grpc.upstream_internal_redirect_failed_total: 0
+cluster.xds-grpc.upstream_internal_redirect_succeeded_total: 0
+cluster.xds-grpc.upstream_rq_200: 1
+cluster.xds-grpc.upstream_rq_2xx: 1
+cluster.xds-grpc.upstream_rq_active: 1
+cluster.xds-grpc.upstream_rq_cancelled: 0
+cluster.xds-grpc.upstream_rq_completed: 1
+cluster.xds-grpc.upstream_rq_maintenance_mode: 0
+cluster.xds-grpc.upstream_rq_max_duration_reached: 0
+cluster.xds-grpc.upstream_rq_pending_active: 0
+cluster.xds-grpc.upstream_rq_pending_failure_eject: 0
+cluster.xds-grpc.upstream_rq_pending_overflow: 0
+cluster.xds-grpc.upstream_rq_pending_total: 1
+cluster.xds-grpc.upstream_rq_per_try_idle_timeout: 0
+cluster.xds-grpc.upstream_rq_per_try_timeout: 0
+cluster.xds-grpc.upstream_rq_retry: 0
+cluster.xds-grpc.upstream_rq_retry_backoff_exponential: 0
+cluster.xds-grpc.upstream_rq_retry_backoff_ratelimited: 0
+cluster.xds-grpc.upstream_rq_retry_limit_exceeded: 0
+cluster.xds-grpc.upstream_rq_retry_overflow: 0
+cluster.xds-grpc.upstream_rq_retry_success: 0
+cluster.xds-grpc.upstream_rq_rx_reset: 0
+cluster.xds-grpc.upstream_rq_timeout: 0
+cluster.xds-grpc.upstream_rq_total: 1
+cluster.xds-grpc.upstream_rq_tx_reset: 0
+cluster.xds-grpc.version: 0
+cluster_manager.active_clusters: 67
+cluster_manager.cds.init_fetch_timeout: 0
+cluster_manager.cds.update_attempt: 9
+cluster_manager.cds.update_failure: 0
+cluster_manager.cds.update_rejected: 0
+cluster_manager.cds.update_success: 8
+cluster_manager.cds.update_time: 1655264617244
+cluster_manager.cds.version: 14300737844584284995
+cluster_manager.cluster_added: 67
+cluster_manager.cluster_modified: 3
+cluster_manager.cluster_removed: 0
+cluster_manager.cluster_updated: 6
+cluster_manager.cluster_updated_via_merge: 0
+cluster_manager.update_merge_cancelled: 0
+cluster_manager.update_out_of_merge_window: 0
+cluster_manager.warming_clusters: 0
+listener_manager.lds.init_fetch_timeout: 0
+listener_manager.lds.update_attempt: 9
+listener_manager.lds.update_failure: 0
+listener_manager.lds.update_rejected: 0
+listener_manager.lds.update_success: 8
+listener_manager.lds.update_time: 1655264617284
+listener_manager.lds.version: 14300737844584284995
+listener_manager.listener_added: 53
+listener_manager.listener_create_failure: 0
+listener_manager.listener_create_success: 106
+listener_manager.listener_in_place_updated: 0
+listener_manager.listener_modified: 0
+listener_manager.listener_removed: 0
+listener_manager.listener_stopped: 0
+listener_manager.total_filter_chains_draining: 0
+listener_manager.total_listeners_active: 53
+listener_manager.total_listeners_draining: 0
+listener_manager.total_listeners_warming: 0
+listener_manager.workers_started: 1
+server.compilation_settings.fips_mode: 0
+server.concurrency: 2
+server.days_until_first_cert_expiring: 0
+server.debug_assertion_failures: 0
+server.dropped_stat_flushes: 0
+server.dynamic_unknown_fields: 0
+server.envoy_bug_failures: 0
+server.hot_restart_epoch: 0
+server.live: 1
+server.main_thread.watchdog_mega_miss: 0
+server.main_thread.watchdog_miss: 0
+server.memory_allocated: 16148680
+server.memory_heap_size: 24641536
+server.memory_physical_size: 27262976
+server.parent_connections: 0
+server.seconds_until_first_ocsp_response_expiring: 0
+server.state: 0
+server.static_unknown_fields: 0
+server.stats_recent_lookups: 13147
+server.total_connections: 1
+server.uptime: 515
+server.version: 16728612
+server.wip_protos: 0
+server.worker_0.watchdog_mega_miss: 0
+server.worker_0.watchdog_miss: 0
+server.worker_1.watchdog_mega_miss: 0
+server.worker_1.watchdog_miss: 0
+wasm.envoy.wasm.runtime.null.active: 20
+wasm.envoy.wasm.runtime.null.created: 25
+wasm.remote_load_cache_entries: 0
+wasm.remote_load_cache_hits: 0
+wasm.remote_load_cache_misses: 0
+wasm.remote_load_cache_negative_hits: 0
+wasm.remote_load_fetch_failures: 0
+wasm.remote_load_fetch_successes: 0
+wasmcustom.component.proxy.tag.1.13.4-solo;.istio_build: 1
+wasmcustom.wasm_filter.stats_filter.cache.hit.metric_cache_count: 0
+wasmcustom.wasm_filter.stats_filter.cache.miss.metric_cache_count: 0
+cluster.xds-grpc.upstream_cx_connect_ms: P0(nan,13.0) P25(nan,13.25) P50(nan,13.5) P75(nan,13.75) P90(nan,13.9) P95(nan,13.95) P99(nan,13.99) P99.5(nan,13.995) P99.9(nan,13.999) P100(nan,14.0)
+cluster.xds-grpc.upstream_cx_length_ms: No recorded values
+cluster_manager.cds.update_duration: P0(nan,3.0) P25(nan,4.1) P50(nan,5.1) P75(nan,7.1) P90(nan,41.2) P95(nan,41.6) P99(nan,41.92) P99.5(nan,41.96) P99.9(nan,41.992) P100(nan,42.0)
+listener_manager.lds.update_duration: P0(nan,8.0) P25(nan,11.0) P50(nan,14.5) P75(nan,17.0) P90(nan,93.2) P95(nan,93.6) P99(nan,93.92) P99.5(nan,93.96) P99.9(nan,93.992) P100(nan,94.0)
+server.initialization_time_ms: P0(nan,330.0) P25(nan,332.5) P50(nan,335.0) P75(nan,337.5) P90(nan,339.0) P95(nan,339.5) P99(nan,339.9) P99.5(nan,339.95) P99.9(nan,339.99) P100(nan,340.0)
+```
+
+### output in prometheus format
+```
+% istioctl experimental envoy-stats --namespace bookinfo-frontends-foo productpage-v1-5f47bdf77b-5mstx
+ --output prom
+# TYPE envoy_cluster_assignment_stale counter
+envoy_cluster_assignment_stale{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_assignment_timeout_received counter
+envoy_cluster_assignment_timeout_received{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_bind_errors counter
+envoy_cluster_bind_errors{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_default_total_match_count counter
+envoy_cluster_default_total_match_count{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_http2_dropped_headers_with_underscores counter
+envoy_cluster_http2_dropped_headers_with_underscores{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_header_overflow counter
+envoy_cluster_http2_header_overflow{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_headers_cb_no_stream counter
+envoy_cluster_http2_headers_cb_no_stream{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_inbound_empty_frames_flood counter
+envoy_cluster_http2_inbound_empty_frames_flood{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_inbound_priority_frames_flood counter
+envoy_cluster_http2_inbound_priority_frames_flood{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_inbound_window_update_frames_flood counter
+envoy_cluster_http2_inbound_window_update_frames_flood{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_keepalive_timeout counter
+envoy_cluster_http2_keepalive_timeout{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_metadata_empty_frames counter
+envoy_cluster_http2_metadata_empty_frames{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_outbound_control_flood counter
+envoy_cluster_http2_outbound_control_flood{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_outbound_flood counter
+envoy_cluster_http2_outbound_flood{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_requests_rejected_with_underscores_in_headers counter
+envoy_cluster_http2_requests_rejected_with_underscores_in_headers{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_rx_messaging_error counter
+envoy_cluster_http2_rx_messaging_error{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_rx_reset counter
+envoy_cluster_http2_rx_reset{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_stream_refused_errors counter
+envoy_cluster_http2_stream_refused_errors{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_trailers counter
+envoy_cluster_http2_trailers{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_tx_flush_timeout counter
+envoy_cluster_http2_tx_flush_timeout{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_tx_reset counter
+envoy_cluster_http2_tx_reset{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_internal_upstream_rq counter
+envoy_cluster_internal_upstream_rq{response_code_class="2xx",cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_internal_upstream_rq_200 counter
+envoy_cluster_internal_upstream_rq_200{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_internal_upstream_rq_completed counter
+envoy_cluster_internal_upstream_rq_completed{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_lb_healthy_panic counter
+envoy_cluster_lb_healthy_panic{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_local_cluster_not_ok counter
+envoy_cluster_lb_local_cluster_not_ok{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_recalculate_zone_structures counter
+envoy_cluster_lb_recalculate_zone_structures{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_subsets_created counter
+envoy_cluster_lb_subsets_created{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_subsets_fallback counter
+envoy_cluster_lb_subsets_fallback{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_subsets_fallback_panic counter
+envoy_cluster_lb_subsets_fallback_panic{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_subsets_removed counter
+envoy_cluster_lb_subsets_removed{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_subsets_selected counter
+envoy_cluster_lb_subsets_selected{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_zone_cluster_too_small counter
+envoy_cluster_lb_zone_cluster_too_small{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_zone_no_capacity_left counter
+envoy_cluster_lb_zone_no_capacity_left{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_zone_number_differs counter
+envoy_cluster_lb_zone_number_differs{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_zone_routing_all_directly counter
+envoy_cluster_lb_zone_routing_all_directly{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_zone_routing_cross_zone counter
+envoy_cluster_lb_zone_routing_cross_zone{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_lb_zone_routing_sampled counter
+envoy_cluster_lb_zone_routing_sampled{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_membership_change counter
+envoy_cluster_membership_change{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_original_dst_host_invalid counter
+envoy_cluster_original_dst_host_invalid{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_retry_or_shadow_abandoned counter
+envoy_cluster_retry_or_shadow_abandoned{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_update_attempt counter
+envoy_cluster_update_attempt{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_update_empty counter
+envoy_cluster_update_empty{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_update_failure counter
+envoy_cluster_update_failure{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_update_no_rebuild counter
+envoy_cluster_update_no_rebuild{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_update_success counter
+envoy_cluster_update_success{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_close_notify counter
+envoy_cluster_upstream_cx_close_notify{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_connect_attempts_exceeded counter
+envoy_cluster_upstream_cx_connect_attempts_exceeded{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_connect_fail counter
+envoy_cluster_upstream_cx_connect_fail{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_connect_timeout counter
+envoy_cluster_upstream_cx_connect_timeout{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_destroy counter
+envoy_cluster_upstream_cx_destroy{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_destroy_local counter
+envoy_cluster_upstream_cx_destroy_local{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_destroy_local_with_active_rq counter
+envoy_cluster_upstream_cx_destroy_local_with_active_rq{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_destroy_remote counter
+envoy_cluster_upstream_cx_destroy_remote{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_destroy_remote_with_active_rq counter
+envoy_cluster_upstream_cx_destroy_remote_with_active_rq{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_destroy_with_active_rq counter
+envoy_cluster_upstream_cx_destroy_with_active_rq{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_http1_total counter
+envoy_cluster_upstream_cx_http1_total{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_http2_total counter
+envoy_cluster_upstream_cx_http2_total{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_upstream_cx_http3_total counter
+envoy_cluster_upstream_cx_http3_total{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_idle_timeout counter
+envoy_cluster_upstream_cx_idle_timeout{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_max_duration_reached counter
+envoy_cluster_upstream_cx_max_duration_reached{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_max_requests counter
+envoy_cluster_upstream_cx_max_requests{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_upstream_cx_none_healthy counter
+envoy_cluster_upstream_cx_none_healthy{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_overflow counter
+envoy_cluster_upstream_cx_overflow{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_pool_overflow counter
+envoy_cluster_upstream_cx_pool_overflow{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_protocol_error counter
+envoy_cluster_upstream_cx_protocol_error{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_cx_rx_bytes_total counter
+envoy_cluster_upstream_cx_rx_bytes_total{cluster_name="xds-grpc"} 2782911
+
+# TYPE envoy_cluster_upstream_cx_total counter
+envoy_cluster_upstream_cx_total{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_upstream_cx_tx_bytes_total counter
+envoy_cluster_upstream_cx_tx_bytes_total{cluster_name="xds-grpc"} 70204
+
+# TYPE envoy_cluster_upstream_flow_control_backed_up_total counter
+envoy_cluster_upstream_flow_control_backed_up_total{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_flow_control_drained_total counter
+envoy_cluster_upstream_flow_control_drained_total{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_flow_control_paused_reading_total counter
+envoy_cluster_upstream_flow_control_paused_reading_total{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_flow_control_resumed_reading_total counter
+envoy_cluster_upstream_flow_control_resumed_reading_total{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_internal_redirect_failed_total counter
+envoy_cluster_upstream_internal_redirect_failed_total{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_internal_redirect_succeeded_total counter
+envoy_cluster_upstream_internal_redirect_succeeded_total{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq counter
+envoy_cluster_upstream_rq{response_code_class="2xx",cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_upstream_rq_200 counter
+envoy_cluster_upstream_rq_200{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_upstream_rq_cancelled counter
+envoy_cluster_upstream_rq_cancelled{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_completed counter
+envoy_cluster_upstream_rq_completed{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_upstream_rq_maintenance_mode counter
+envoy_cluster_upstream_rq_maintenance_mode{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_max_duration_reached counter
+envoy_cluster_upstream_rq_max_duration_reached{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_pending_failure_eject counter
+envoy_cluster_upstream_rq_pending_failure_eject{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_pending_overflow counter
+envoy_cluster_upstream_rq_pending_overflow{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_pending_total counter
+envoy_cluster_upstream_rq_pending_total{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_upstream_rq_per_try_idle_timeout counter
+envoy_cluster_upstream_rq_per_try_idle_timeout{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_per_try_timeout counter
+envoy_cluster_upstream_rq_per_try_timeout{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_retry counter
+envoy_cluster_upstream_rq_retry{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_retry_backoff_exponential counter
+envoy_cluster_upstream_rq_retry_backoff_exponential{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_retry_backoff_ratelimited counter
+envoy_cluster_upstream_rq_retry_backoff_ratelimited{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_retry_limit_exceeded counter
+envoy_cluster_upstream_rq_retry_limit_exceeded{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_retry_overflow counter
+envoy_cluster_upstream_rq_retry_overflow{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_retry_success counter
+envoy_cluster_upstream_rq_retry_success{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_rx_reset counter
+envoy_cluster_upstream_rq_rx_reset{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_timeout counter
+envoy_cluster_upstream_rq_timeout{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_total counter
+envoy_cluster_upstream_rq_total{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_upstream_rq_tx_reset counter
+envoy_cluster_upstream_rq_tx_reset{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_manager_cds_init_fetch_timeout counter
+envoy_cluster_manager_cds_init_fetch_timeout{} 0
+
+# TYPE envoy_cluster_manager_cds_update_attempt counter
+envoy_cluster_manager_cds_update_attempt{} 9
+
+# TYPE envoy_cluster_manager_cds_update_failure counter
+envoy_cluster_manager_cds_update_failure{} 0
+
+# TYPE envoy_cluster_manager_cds_update_rejected counter
+envoy_cluster_manager_cds_update_rejected{} 0
+
+# TYPE envoy_cluster_manager_cds_update_success counter
+envoy_cluster_manager_cds_update_success{} 8
+
+# TYPE envoy_cluster_manager_cluster_added counter
+envoy_cluster_manager_cluster_added{} 67
+
+# TYPE envoy_cluster_manager_cluster_modified counter
+envoy_cluster_manager_cluster_modified{} 3
+
+# TYPE envoy_cluster_manager_cluster_removed counter
+envoy_cluster_manager_cluster_removed{} 0
+
+# TYPE envoy_cluster_manager_cluster_updated counter
+envoy_cluster_manager_cluster_updated{} 6
+
+# TYPE envoy_cluster_manager_cluster_updated_via_merge counter
+envoy_cluster_manager_cluster_updated_via_merge{} 0
+
+# TYPE envoy_cluster_manager_update_merge_cancelled counter
+envoy_cluster_manager_update_merge_cancelled{} 0
+
+# TYPE envoy_cluster_manager_update_out_of_merge_window counter
+envoy_cluster_manager_update_out_of_merge_window{} 0
+
+# TYPE envoy_listener_manager_lds_init_fetch_timeout counter
+envoy_listener_manager_lds_init_fetch_timeout{} 0
+
+# TYPE envoy_listener_manager_lds_update_attempt counter
+envoy_listener_manager_lds_update_attempt{} 9
+
+# TYPE envoy_listener_manager_lds_update_failure counter
+envoy_listener_manager_lds_update_failure{} 0
+
+# TYPE envoy_listener_manager_lds_update_rejected counter
+envoy_listener_manager_lds_update_rejected{} 0
+
+# TYPE envoy_listener_manager_lds_update_success counter
+envoy_listener_manager_lds_update_success{} 8
+
+# TYPE envoy_listener_manager_listener_added counter
+envoy_listener_manager_listener_added{} 53
+
+# TYPE envoy_listener_manager_listener_create_failure counter
+envoy_listener_manager_listener_create_failure{} 0
+
+# TYPE envoy_listener_manager_listener_create_success counter
+envoy_listener_manager_listener_create_success{} 106
+
+# TYPE envoy_listener_manager_listener_in_place_updated counter
+envoy_listener_manager_listener_in_place_updated{} 0
+
+# TYPE envoy_listener_manager_listener_modified counter
+envoy_listener_manager_listener_modified{} 0
+
+# TYPE envoy_listener_manager_listener_removed counter
+envoy_listener_manager_listener_removed{} 0
+
+# TYPE envoy_listener_manager_listener_stopped counter
+envoy_listener_manager_listener_stopped{} 0
+
+# TYPE envoy_server_debug_assertion_failures counter
+envoy_server_debug_assertion_failures{} 0
+
+# TYPE envoy_server_dropped_stat_flushes counter
+envoy_server_dropped_stat_flushes{} 0
+
+# TYPE envoy_server_dynamic_unknown_fields counter
+envoy_server_dynamic_unknown_fields{} 0
+
+# TYPE envoy_server_envoy_bug_failures counter
+envoy_server_envoy_bug_failures{} 0
+
+# TYPE envoy_server_main_thread_watchdog_mega_miss counter
+envoy_server_main_thread_watchdog_mega_miss{} 0
+
+# TYPE envoy_server_main_thread_watchdog_miss counter
+envoy_server_main_thread_watchdog_miss{} 0
+
+# TYPE envoy_server_static_unknown_fields counter
+envoy_server_static_unknown_fields{} 0
+
+# TYPE envoy_server_wip_protos counter
+envoy_server_wip_protos{} 0
+
+# TYPE envoy_server_worker_0_watchdog_mega_miss counter
+envoy_server_worker_0_watchdog_mega_miss{} 0
+
+# TYPE envoy_server_worker_0_watchdog_miss counter
+envoy_server_worker_0_watchdog_miss{} 0
+
+# TYPE envoy_server_worker_1_watchdog_mega_miss counter
+envoy_server_worker_1_watchdog_mega_miss{} 0
+
+# TYPE envoy_server_worker_1_watchdog_miss counter
+envoy_server_worker_1_watchdog_miss{} 0
+
+# TYPE envoy_wasm_envoy_wasm_runtime_null_created counter
+envoy_wasm_envoy_wasm_runtime_null_created{} 25
+
+# TYPE envoy_wasm_remote_load_cache_hits counter
+envoy_wasm_remote_load_cache_hits{} 0
+
+# TYPE envoy_wasm_remote_load_cache_misses counter
+envoy_wasm_remote_load_cache_misses{} 0
+
+# TYPE envoy_wasm_remote_load_cache_negative_hits counter
+envoy_wasm_remote_load_cache_negative_hits{} 0
+
+# TYPE envoy_wasm_remote_load_fetch_failures counter
+envoy_wasm_remote_load_fetch_failures{} 0
+
+# TYPE envoy_wasm_remote_load_fetch_successes counter
+envoy_wasm_remote_load_fetch_successes{} 0
+
+# TYPE metric_cache_count counter
+metric_cache_count{cache="hit",wasm_filter="stats_filter"} 0
+metric_cache_count{cache="miss",wasm_filter="stats_filter"} 0
+
+# TYPE envoy_cluster_circuit_breakers_default_cx_open gauge
+envoy_cluster_circuit_breakers_default_cx_open{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_circuit_breakers_default_cx_pool_open gauge
+envoy_cluster_circuit_breakers_default_cx_pool_open{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_circuit_breakers_default_rq_open gauge
+envoy_cluster_circuit_breakers_default_rq_open{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_circuit_breakers_default_rq_pending_open gauge
+envoy_cluster_circuit_breakers_default_rq_pending_open{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_circuit_breakers_default_rq_retry_open gauge
+envoy_cluster_circuit_breakers_default_rq_retry_open{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_circuit_breakers_high_cx_open gauge
+envoy_cluster_circuit_breakers_high_cx_open{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_circuit_breakers_high_cx_pool_open gauge
+envoy_cluster_circuit_breakers_high_cx_pool_open{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_circuit_breakers_high_rq_open gauge
+envoy_cluster_circuit_breakers_high_rq_open{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_circuit_breakers_high_rq_pending_open gauge
+envoy_cluster_circuit_breakers_high_rq_pending_open{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_circuit_breakers_high_rq_retry_open gauge
+envoy_cluster_circuit_breakers_high_rq_retry_open{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_pending_send_bytes gauge
+envoy_cluster_http2_pending_send_bytes{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_http2_streams_active gauge
+envoy_cluster_http2_streams_active{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_lb_subsets_active gauge
+envoy_cluster_lb_subsets_active{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_max_host_weight gauge
+envoy_cluster_max_host_weight{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_membership_degraded gauge
+envoy_cluster_membership_degraded{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_membership_excluded gauge
+envoy_cluster_membership_excluded{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_membership_healthy gauge
+envoy_cluster_membership_healthy{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_membership_total gauge
+envoy_cluster_membership_total{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_upstream_cx_active gauge
+envoy_cluster_upstream_cx_active{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_upstream_cx_rx_bytes_buffered gauge
+envoy_cluster_upstream_cx_rx_bytes_buffered{cluster_name="xds-grpc"} 17
+
+# TYPE envoy_cluster_upstream_cx_tx_bytes_buffered gauge
+envoy_cluster_upstream_cx_tx_bytes_buffered{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_upstream_rq_active gauge
+envoy_cluster_upstream_rq_active{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_upstream_rq_pending_active gauge
+envoy_cluster_upstream_rq_pending_active{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_version gauge
+envoy_cluster_version{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_manager_active_clusters gauge
+envoy_cluster_manager_active_clusters{} 67
+
+# TYPE envoy_cluster_manager_cds_update_time gauge
+envoy_cluster_manager_cds_update_time{} 1655264617244
+
+# TYPE envoy_cluster_manager_cds_version gauge
+envoy_cluster_manager_cds_version{} 14300737844584284995
+
+# TYPE envoy_cluster_manager_warming_clusters gauge
+envoy_cluster_manager_warming_clusters{} 0
+
+# TYPE envoy_listener_manager_lds_update_time gauge
+envoy_listener_manager_lds_update_time{} 1655264617284
+
+# TYPE envoy_listener_manager_lds_version gauge
+envoy_listener_manager_lds_version{} 14300737844584284995
+
+# TYPE envoy_listener_manager_total_filter_chains_draining gauge
+envoy_listener_manager_total_filter_chains_draining{} 0
+
+# TYPE envoy_listener_manager_total_listeners_active gauge
+envoy_listener_manager_total_listeners_active{} 53
+
+# TYPE envoy_listener_manager_total_listeners_draining gauge
+envoy_listener_manager_total_listeners_draining{} 0
+
+# TYPE envoy_listener_manager_total_listeners_warming gauge
+envoy_listener_manager_total_listeners_warming{} 0
+
+# TYPE envoy_listener_manager_workers_started gauge
+envoy_listener_manager_workers_started{} 1
+
+# TYPE envoy_server_compilation_settings_fips_mode gauge
+envoy_server_compilation_settings_fips_mode{} 0
+
+# TYPE envoy_server_concurrency gauge
+envoy_server_concurrency{} 2
+
+# TYPE envoy_server_days_until_first_cert_expiring gauge
+envoy_server_days_until_first_cert_expiring{} 0
+
+# TYPE envoy_server_hot_restart_epoch gauge
+envoy_server_hot_restart_epoch{} 0
+
+# TYPE envoy_server_live gauge
+envoy_server_live{} 1
+
+# TYPE envoy_server_memory_allocated gauge
+envoy_server_memory_allocated{} 16152776
+
+# TYPE envoy_server_memory_heap_size gauge
+envoy_server_memory_heap_size{} 24641536
+
+# TYPE envoy_server_memory_physical_size gauge
+envoy_server_memory_physical_size{} 27262976
+
+# TYPE envoy_server_parent_connections gauge
+envoy_server_parent_connections{} 0
+
+# TYPE envoy_server_seconds_until_first_ocsp_response_expiring gauge
+envoy_server_seconds_until_first_ocsp_response_expiring{} 0
+
+# TYPE envoy_server_state gauge
+envoy_server_state{} 0
+
+# TYPE envoy_server_stats_recent_lookups gauge
+envoy_server_stats_recent_lookups{} 13147
+
+# TYPE envoy_server_total_connections gauge
+envoy_server_total_connections{} 1
+
+# TYPE envoy_server_uptime gauge
+envoy_server_uptime{} 925
+
+# TYPE envoy_server_version gauge
+envoy_server_version{} 16728612
+
+# TYPE envoy_wasm_envoy_wasm_runtime_null_active gauge
+envoy_wasm_envoy_wasm_runtime_null_active{} 20
+
+# TYPE envoy_wasm_remote_load_cache_entries gauge
+envoy_wasm_remote_load_cache_entries{} 0
+
+# TYPE istio_build gauge
+istio_build{component="proxy",tag="1.13.4-solo"} 1
+
+# TYPE envoy_cluster_upstream_cx_connect_ms histogram
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="0.5"} 0
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="1"} 0
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="5"} 0
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="10"} 0
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="25"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="50"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="100"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="250"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="500"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="1000"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="2500"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="5000"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="10000"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="30000"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="60000"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="300000"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="600000"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="1800000"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="3600000"} 1
+envoy_cluster_upstream_cx_connect_ms_bucket{cluster_name="xds-grpc",le="+Inf"} 1
+envoy_cluster_upstream_cx_connect_ms_sum{cluster_name="xds-grpc"} 13.5
+envoy_cluster_upstream_cx_connect_ms_count{cluster_name="xds-grpc"} 1
+
+# TYPE envoy_cluster_upstream_cx_length_ms histogram
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="0.5"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="1"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="5"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="10"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="25"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="50"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="100"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="250"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="500"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="1000"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="2500"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="5000"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="10000"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="30000"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="60000"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="300000"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="600000"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="1800000"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="3600000"} 0
+envoy_cluster_upstream_cx_length_ms_bucket{cluster_name="xds-grpc",le="+Inf"} 0
+envoy_cluster_upstream_cx_length_ms_sum{cluster_name="xds-grpc"} 0
+envoy_cluster_upstream_cx_length_ms_count{cluster_name="xds-grpc"} 0
+
+# TYPE envoy_cluster_manager_cds_update_duration histogram
+envoy_cluster_manager_cds_update_duration_bucket{le="0.5"} 0
+envoy_cluster_manager_cds_update_duration_bucket{le="1"} 0
+envoy_cluster_manager_cds_update_duration_bucket{le="5"} 2
+envoy_cluster_manager_cds_update_duration_bucket{le="10"} 6
+envoy_cluster_manager_cds_update_duration_bucket{le="25"} 6
+envoy_cluster_manager_cds_update_duration_bucket{le="50"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="100"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="250"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="500"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="1000"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="2500"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="5000"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="10000"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="30000"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="60000"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="300000"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="600000"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="1800000"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="3600000"} 8
+envoy_cluster_manager_cds_update_duration_bucket{le="+Inf"} 8
+envoy_cluster_manager_cds_update_duration_sum{} 99.299999999999997157829056959599
+envoy_cluster_manager_cds_update_duration_count{} 8
+
+# TYPE envoy_listener_manager_lds_update_duration histogram
+envoy_listener_manager_lds_update_duration_bucket{le="0.5"} 0
+envoy_listener_manager_lds_update_duration_bucket{le="1"} 0
+envoy_listener_manager_lds_update_duration_bucket{le="5"} 0
+envoy_listener_manager_lds_update_duration_bucket{le="10"} 1
+envoy_listener_manager_lds_update_duration_bucket{le="25"} 7
+envoy_listener_manager_lds_update_duration_bucket{le="50"} 7
+envoy_listener_manager_lds_update_duration_bucket{le="100"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="250"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="500"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="1000"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="2500"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="5000"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="10000"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="30000"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="60000"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="300000"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="600000"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="1800000"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="3600000"} 8
+envoy_listener_manager_lds_update_duration_bucket{le="+Inf"} 8
+envoy_listener_manager_lds_update_duration_sum{} 191.5500000000000113686837721616
+envoy_listener_manager_lds_update_duration_count{} 8
+
+# TYPE envoy_server_initialization_time_ms histogram
+envoy_server_initialization_time_ms_bucket{le="0.5"} 0
+envoy_server_initialization_time_ms_bucket{le="1"} 0
+envoy_server_initialization_time_ms_bucket{le="5"} 0
+envoy_server_initialization_time_ms_bucket{le="10"} 0
+envoy_server_initialization_time_ms_bucket{le="25"} 0
+envoy_server_initialization_time_ms_bucket{le="50"} 0
+envoy_server_initialization_time_ms_bucket{le="100"} 0
+envoy_server_initialization_time_ms_bucket{le="250"} 0
+envoy_server_initialization_time_ms_bucket{le="500"} 1
+envoy_server_initialization_time_ms_bucket{le="1000"} 1
+envoy_server_initialization_time_ms_bucket{le="2500"} 1
+envoy_server_initialization_time_ms_bucket{le="5000"} 1
+envoy_server_initialization_time_ms_bucket{le="10000"} 1
+envoy_server_initialization_time_ms_bucket{le="30000"} 1
+envoy_server_initialization_time_ms_bucket{le="60000"} 1
+envoy_server_initialization_time_ms_bucket{le="300000"} 1
+envoy_server_initialization_time_ms_bucket{le="600000"} 1
+envoy_server_initialization_time_ms_bucket{le="1800000"} 1
+envoy_server_initialization_time_ms_bucket{le="3600000"} 1
+envoy_server_initialization_time_ms_bucket{le="+Inf"} 1
+envoy_server_initialization_time_ms_sum{} 335
+envoy_server_initialization_time_ms_count{} 1
+```
+
+## Get all Envoy proxy config
+```
+istioctl proxy-config all -n <namespace> <pod> -o <output>
+```
+
+Example:
+```
+$ istioctl proxy-config all -n bookinfo-frontends-foo productpage-v1-5f47bdf77b-5mstx
+SERVICE FQDN                                                         PORT      SUBSET     DIRECTION     TYPE             DESTINATION RULE
+                                                                     9080      -          inbound       ORIGINAL_DST     
+BlackHoleCluster                                                     -         -          -             STATIC           
+InboundPassthroughClusterIpv4                                        -         -          -             ORIGINAL_DST     
+InboundPassthroughClusterIpv6                                        -         -          -             ORIGINAL_DST     
+PassthroughCluster                                                   -         -          -             ORIGINAL_DST     
+agent                                                                -         -          -             STATIC           
+argocd-applicationset-controller.argocd.svc.cluster.local            7000      -          outbound      EDS              
+argocd-applicationset-controller.argocd.svc.cluster.local            8080      -          outbound      EDS              
+argocd-dex-server.argocd.svc.cluster.local                           5556      -          outbound      EDS              
+argocd-dex-server.argocd.svc.cluster.local                           5557      -          outbound      EDS              
+argocd-dex-server.argocd.svc.cluster.local                           5558      -          outbound      EDS              
+argocd-metrics.argocd.svc.cluster.local                              8082      -          outbound      EDS              
+argocd-notifications-controller-metrics.argocd.svc.cluster.local     9001      -          outbound      EDS              
+argocd-redis.argocd.svc.cluster.local                                6379      -          outbound      EDS              
+argocd-repo-server.argocd.svc.cluster.local                          8081      -          outbound      EDS              
+argocd-repo-server.argocd.svc.cluster.local                          8084      -          outbound      EDS              
+argocd-server-metrics.argocd.svc.cluster.local                       8083      -          outbound      EDS              
+argocd-server.argocd.svc.cluster.local                               80        -          outbound      EDS              
+argocd-server.argocd.svc.cluster.local                               443       -          outbound      EDS              
+cert-manager-webhook.cert-manager.svc.cluster.local                  443       -          outbound      EDS              
+cert-manager.cert-manager.svc.cluster.local                          9402      -          outbound      EDS              
+details.bookinfo-backends-foo.svc.cluster.local                      9080      -          outbound      EDS              
+envoy_accesslog_service                                              -         -          -             STRICT_DNS       
+envoy_metrics_service                                                -         -          -             STRICT_DNS       
+ext-auth-service.gloo-mesh-addons.svc.cluster.local                  8082      -          outbound      EDS              
+ext-auth-service.gloo-mesh-addons.svc.cluster.local                  8083      -          outbound      EDS              
+ext-auth-service.gloo-mesh-addons.svc.cluster.local                  9091      -          outbound      EDS              
+gloo-mesh-agent.gloo-mesh.svc.cluster.local                          9091      -          outbound      EDS              
+gloo-mesh-agent.gloo-mesh.svc.cluster.local                          9977      -          outbound      EDS              
+gloo-mesh-agent.gloo-mesh.svc.cluster.local                          9988      -          outbound      EDS              
+gloo-mesh-mgmt-server.gloo-mesh.svc.cluster.local                    8091      -          outbound      EDS              
+gloo-mesh-mgmt-server.gloo-mesh.svc.cluster.local                    9900      -          outbound      EDS              
+gloo-mesh-redis.gloo-mesh.svc.cluster.local                          6379      -          outbound      EDS              
+gloo-mesh-ui.gloo-mesh.svc.cluster.local                             8081      -          outbound      EDS              
+gloo-mesh-ui.gloo-mesh.svc.cluster.local                             8090      -          outbound      EDS              
+gloo-mesh-ui.gloo-mesh.svc.cluster.local                             10101     -          outbound      EDS              
+grafana.istio-system.svc.cluster.local                               3000      -          outbound      EDS              
+in-mesh.httpbin.svc.cluster.local                                    8000      -          outbound      EDS              
+istio-eastwestgateway.istio-gateways.svc.cluster.local               15012     -          outbound      EDS              
+istio-eastwestgateway.istio-gateways.svc.cluster.local               15017     -          outbound      EDS              
+istio-eastwestgateway.istio-gateways.svc.cluster.local               15021     -          outbound      EDS              
+istio-eastwestgateway.istio-gateways.svc.cluster.local               15443     -          outbound      EDS              
+istio-ingressgateway.istio-gateways.svc.cluster.local                80        -          outbound      EDS              
+istio-ingressgateway.istio-gateways.svc.cluster.local                443       -          outbound      EDS              
+istiod-1-13.istio-system.svc.cluster.local                           443       -          outbound      EDS              
+istiod-1-13.istio-system.svc.cluster.local                           15010     -          outbound      EDS              
+istiod-1-13.istio-system.svc.cluster.local                           15012     -          outbound      EDS              
+istiod-1-13.istio-system.svc.cluster.local                           15014     -          outbound      EDS              
+kiali.istio-system.svc.cluster.local                                 9090      -          outbound      EDS              
+kiali.istio-system.svc.cluster.local                                 20001     -          outbound      EDS              
+kube-dns.kube-system.svc.cluster.local                               53        -          outbound      EDS              
+kube-dns.kube-system.svc.cluster.local                               9153      -          outbound      EDS              
+kubernetes.default.svc.cluster.local                                 443       -          outbound      EDS              
+metrics-server.kube-system.svc.cluster.local                         443       -          outbound      EDS              
+productpage.bookinfo-frontends-foo.svc.cluster.local                 9081      -          outbound      EDS              
+prometheus-server.gloo-mesh.svc.cluster.local                        80        -          outbound      EDS              
+prometheus.istio-system.svc.cluster.local                            9090      -          outbound      EDS              
+prometheus_stats                                                     -         -          -             STATIC           
+rate-limiter.gloo-mesh-addons.svc.cluster.local                      8083      -          outbound      EDS              
+rate-limiter.gloo-mesh-addons.svc.cluster.local                      8084      -          outbound      EDS              
+rate-limiter.gloo-mesh-addons.svc.cluster.local                      9091      -          outbound      EDS              
+ratings.bookinfo-backends-foo.svc.cluster.local                      9080      -          outbound      EDS              
+redis.gloo-mesh-addons.svc.cluster.local                             6379      -          outbound      EDS              
+reviews.bookinfo-backends-foo.svc.cluster.local                      9080      -          outbound      EDS              
+sds-grpc                                                             -         -          -             STATIC           
+xds-grpc                                                             -         -          -             STATIC           
+zipkin                                                               -         -          -             STRICT_DNS       
+
+ADDRESS       PORT  MATCH                                                                                           DESTINATION
+10.43.0.10    53    ALL                                                                                             Cluster: outbound|53||kube-dns.kube-system.svc.cluster.local
+0.0.0.0       80    Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 80
+0.0.0.0       80    ALL                                                                                             PassthroughCluster
+10.43.0.1     443   ALL                                                                                             Cluster: outbound|443||kubernetes.default.svc.cluster.local
+10.43.130.218 443   ALL                                                                                             Cluster: outbound|443||metrics-server.kube-system.svc.cluster.local
+10.43.226.142 443   ALL                                                                                             Cluster: outbound|443||istio-ingressgateway.istio-gateways.svc.cluster.local
+10.43.232.107 443   ALL                                                                                             Cluster: outbound|443||argocd-server.argocd.svc.cluster.local
+10.43.233.218 443   ALL                                                                                             Cluster: outbound|443||cert-manager-webhook.cert-manager.svc.cluster.local
+10.43.90.38   443   ALL                                                                                             Cluster: outbound|443||istiod-1-13.istio-system.svc.cluster.local
+10.43.7.92    3000  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: grafana.istio-system.svc.cluster.local:3000
+10.43.7.92    3000  ALL                                                                                             Cluster: outbound|3000||grafana.istio-system.svc.cluster.local
+0.0.0.0       5556  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 5556
+0.0.0.0       5556  ALL                                                                                             PassthroughCluster
+0.0.0.0       5557  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 5557
+0.0.0.0       5557  ALL                                                                                             PassthroughCluster
+10.43.154.148 5558  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: argocd-dex-server.argocd.svc.cluster.local:5558
+10.43.154.148 5558  ALL                                                                                             Cluster: outbound|5558||argocd-dex-server.argocd.svc.cluster.local
+10.43.176.201 6379  ALL                                                                                             Cluster: outbound|6379||gloo-mesh-redis.gloo-mesh.svc.cluster.local
+10.43.5.110   6379  ALL                                                                                             Cluster: outbound|6379||redis.gloo-mesh-addons.svc.cluster.local
+10.43.74.75   6379  ALL                                                                                             Cluster: outbound|6379||argocd-redis.argocd.svc.cluster.local
+10.43.147.48  7000  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: argocd-applicationset-controller.argocd.svc.cluster.local:7000
+10.43.147.48  7000  ALL                                                                                             Cluster: outbound|7000||argocd-applicationset-controller.argocd.svc.cluster.local
+0.0.0.0       8000  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 8000
+0.0.0.0       8000  ALL                                                                                             PassthroughCluster
+10.43.147.48  8080  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: argocd-applicationset-controller.argocd.svc.cluster.local:8080
+10.43.147.48  8080  ALL                                                                                             Cluster: outbound|8080||argocd-applicationset-controller.argocd.svc.cluster.local
+10.43.13.114  8081  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: gloo-mesh-ui.gloo-mesh.svc.cluster.local:8081
+10.43.13.114  8081  ALL                                                                                             Cluster: outbound|8081||gloo-mesh-ui.gloo-mesh.svc.cluster.local
+10.43.176.45  8081  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: argocd-repo-server.argocd.svc.cluster.local:8081
+10.43.176.45  8081  ALL                                                                                             Cluster: outbound|8081||argocd-repo-server.argocd.svc.cluster.local
+10.43.126.237 8082  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: argocd-metrics.argocd.svc.cluster.local:8082
+10.43.126.237 8082  ALL                                                                                             Cluster: outbound|8082||argocd-metrics.argocd.svc.cluster.local
+10.43.240.159 8082  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: ext-auth-service.gloo-mesh-addons.svc.cluster.local:8082
+10.43.240.159 8082  ALL                                                                                             Cluster: outbound|8082||ext-auth-service.gloo-mesh-addons.svc.cluster.local
+0.0.0.0       8083  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 8083
+0.0.0.0       8083  ALL                                                                                             PassthroughCluster
+10.43.247.226 8083  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: argocd-server-metrics.argocd.svc.cluster.local:8083
+10.43.247.226 8083  ALL                                                                                             Cluster: outbound|8083||argocd-server-metrics.argocd.svc.cluster.local
+10.43.176.45  8084  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: argocd-repo-server.argocd.svc.cluster.local:8084
+10.43.176.45  8084  ALL                                                                                             Cluster: outbound|8084||argocd-repo-server.argocd.svc.cluster.local
+10.43.59.128  8084  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: rate-limiter.gloo-mesh-addons.svc.cluster.local:8084
+10.43.59.128  8084  ALL                                                                                             Cluster: outbound|8084||rate-limiter.gloo-mesh-addons.svc.cluster.local
+10.43.13.114  8090  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: gloo-mesh-ui.gloo-mesh.svc.cluster.local:8090
+10.43.13.114  8090  ALL                                                                                             Cluster: outbound|8090||gloo-mesh-ui.gloo-mesh.svc.cluster.local
+10.43.148.167 8091  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: gloo-mesh-mgmt-server.gloo-mesh.svc.cluster.local:8091
+10.43.148.167 8091  ALL                                                                                             Cluster: outbound|8091||gloo-mesh-mgmt-server.gloo-mesh.svc.cluster.local
+10.43.219.58  9001  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: argocd-notifications-controller-metrics.argocd.svc.cluster.local:9001
+10.43.219.58  9001  ALL                                                                                             Cluster: outbound|9001||argocd-notifications-controller-metrics.argocd.svc.cluster.local
+0.0.0.0       9080  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 9080
+0.0.0.0       9080  ALL                                                                                             PassthroughCluster
+0.0.0.0       9081  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 9081
+0.0.0.0       9081  ALL                                                                                             PassthroughCluster
+0.0.0.0       9090  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 9090
+0.0.0.0       9090  ALL                                                                                             PassthroughCluster
+10.43.215.86  9091  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: gloo-mesh-agent.gloo-mesh.svc.cluster.local:9091
+10.43.215.86  9091  ALL                                                                                             Cluster: outbound|9091||gloo-mesh-agent.gloo-mesh.svc.cluster.local
+10.43.240.159 9091  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: ext-auth-service.gloo-mesh-addons.svc.cluster.local:9091
+10.43.240.159 9091  ALL                                                                                             Cluster: outbound|9091||ext-auth-service.gloo-mesh-addons.svc.cluster.local
+10.43.59.128  9091  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: rate-limiter.gloo-mesh-addons.svc.cluster.local:9091
+10.43.59.128  9091  ALL                                                                                             Cluster: outbound|9091||rate-limiter.gloo-mesh-addons.svc.cluster.local
+10.43.0.10    9153  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: kube-dns.kube-system.svc.cluster.local:9153
+10.43.0.10    9153  ALL                                                                                             Cluster: outbound|9153||kube-dns.kube-system.svc.cluster.local
+10.43.71.70   9402  ALL                                                                                             Cluster: outbound|9402||cert-manager.cert-manager.svc.cluster.local
+0.0.0.0       9900  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 9900
+0.0.0.0       9900  ALL                                                                                             PassthroughCluster
+0.0.0.0       9977  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 9977
+0.0.0.0       9977  ALL                                                                                             PassthroughCluster
+0.0.0.0       9988  Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 9988
+0.0.0.0       9988  ALL                                                                                             PassthroughCluster
+0.0.0.0       10101 Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 10101
+0.0.0.0       10101 ALL                                                                                             PassthroughCluster
+0.0.0.0       15001 ALL                                                                                             PassthroughCluster
+0.0.0.0       15001 Addr: *:15001                                                                                   Non-HTTP/Non-TCP
+0.0.0.0       15006 Addr: *:15006                                                                                   Non-HTTP/Non-TCP
+0.0.0.0       15006 Trans: tls; Addr: ::0/0                                                                         InboundPassthroughClusterIpv6
+0.0.0.0       15006 Trans: raw_buffer; Addr: ::0/0                                                                  InboundPassthroughClusterIpv6
+0.0.0.0       15006 Trans: tls; App: TCP TLS; Addr: ::0/0                                                           InboundPassthroughClusterIpv6
+0.0.0.0       15006 Trans: raw_buffer; App: http/1.1,h2c; Addr: ::0/0                                               InboundPassthroughClusterIpv6
+0.0.0.0       15006 Trans: tls; App: istio-http/1.0,istio-http/1.1,istio-h2; Addr: ::0/0                            InboundPassthroughClusterIpv6
+0.0.0.0       15006 Trans: tls; Addr: 0.0.0.0/0                                                                     InboundPassthroughClusterIpv4
+0.0.0.0       15006 Trans: raw_buffer; Addr: 0.0.0.0/0                                                              InboundPassthroughClusterIpv4
+0.0.0.0       15006 Trans: tls; App: TCP TLS; Addr: 0.0.0.0/0                                                       InboundPassthroughClusterIpv4
+0.0.0.0       15006 Trans: raw_buffer; App: http/1.1,h2c; Addr: 0.0.0.0/0                                           InboundPassthroughClusterIpv4
+0.0.0.0       15006 Trans: tls; App: istio-http/1.0,istio-http/1.1,istio-h2; Addr: 0.0.0.0/0                        InboundPassthroughClusterIpv4
+0.0.0.0       15006 Trans: tls; App: istio,istio-peer-exchange,istio-http/1.0,istio-http/1.1,istio-h2; Addr: *:9080 Cluster: inbound|9080||
+0.0.0.0       15006 Trans: raw_buffer; Addr: *:9080                                                                 Cluster: inbound|9080||
+0.0.0.0       15010 Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 15010
+0.0.0.0       15010 ALL                                                                                             PassthroughCluster
+10.43.115.63  15012 ALL                                                                                             Cluster: outbound|15012||istio-eastwestgateway.istio-gateways.svc.cluster.local
+10.43.90.38   15012 ALL                                                                                             Cluster: outbound|15012||istiod-1-13.istio-system.svc.cluster.local
+0.0.0.0       15014 Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 15014
+0.0.0.0       15014 ALL                                                                                             PassthroughCluster
+10.43.115.63  15017 ALL                                                                                             Cluster: outbound|15017||istio-eastwestgateway.istio-gateways.svc.cluster.local
+0.0.0.0       15021 ALL                                                                                             Inline Route: /healthz/ready*
+10.43.115.63  15021 ALL                                                                                             Cluster: outbound|15021||istio-eastwestgateway.istio-gateways.svc.cluster.local
+0.0.0.0       15090 ALL                                                                                             Inline Route: /stats/prometheus*
+10.43.115.63  15443 ALL                                                                                             Cluster: outbound|15443||istio-eastwestgateway.istio-gateways.svc.cluster.local
+0.0.0.0       20001 Trans: raw_buffer; App: http/1.1,h2c                                                            Route: 20001
+0.0.0.0       20001 ALL                                                                                             PassthroughCluster
+
+NAME                                                                      DOMAINS                                                         MATCH                  VIRTUAL SERVICE
+argocd-notifications-controller-metrics.argocd.svc.cluster.local:9001     *                                                               /*                     
+grafana.istio-system.svc.cluster.local:3000                               *                                                               /*                     
+kube-dns.kube-system.svc.cluster.local:9153                               *                                                               /*                     
+argocd-applicationset-controller.argocd.svc.cluster.local:8080            *                                                               /*                     
+gloo-mesh-mgmt-server.gloo-mesh.svc.cluster.local:8091                    *                                                               /*                     
+argocd-server-metrics.argocd.svc.cluster.local:8083                       *                                                               /*                     
+9081                                                                      productpage, productpage.bookinfo-frontends-foo + 1 more...     /*                     
+80                                                                        argocd-server.argocd, 10.43.232.107                             /*                     
+80                                                                        istio-ingressgateway.istio-gateways, 10.43.226.142              /*                     
+80                                                                        prometheus-server.gloo-mesh, 10.43.235.215                      /*                     
+gloo-mesh-agent.gloo-mesh.svc.cluster.local:9091                          *                                                               /*                     
+rate-limiter.gloo-mesh-addons.svc.cluster.local:9091                      *                                                               /*                     
+argocd-metrics.argocd.svc.cluster.local:8082                              *                                                               /*                     
+8083                                                                      argocd-server-metrics.argocd, 10.43.247.226                     /*                     
+8083                                                                      ext-auth-service.gloo-mesh-addons, 10.43.240.159                /*                     
+8083                                                                      rate-limiter.gloo-mesh-addons, 10.43.59.128                     /*                     
+15014                                                                     istiod-1-13.istio-system, 10.43.90.38                           /*                     
+9977                                                                      gloo-mesh-agent.gloo-mesh, 10.43.215.86                         /*                     
+9080                                                                      details.bookinfo-backends-foo, 10.43.4.215                      /*                     
+9080                                                                      ratings.bookinfo-backends-foo, 10.43.31.33                      /*                     
+9080                                                                      reviews.bookinfo-backends-foo, 10.43.209.205                    /*                     
+15010                                                                     istiod-1-13.istio-system, 10.43.90.38                           /*                     
+argocd-dex-server.argocd.svc.cluster.local:5558                           *                                                               /*                     
+argocd-repo-server.argocd.svc.cluster.local:8084                          *                                                               /*                     
+ext-auth-service.gloo-mesh-addons.svc.cluster.local:9091                  *                                                               /*                     
+9090                                                                      kiali.istio-system, 10.43.105.64                                /*                     
+9090                                                                      prometheus.istio-system, 10.43.84.216                           /*                     
+gloo-mesh-ui.gloo-mesh.svc.cluster.local:8081                             *                                                               /*                     
+9988                                                                      gloo-mesh-agent.gloo-mesh, 10.43.215.86                         /*                     
+gloo-mesh-ui.gloo-mesh.svc.cluster.local:8090                             *                                                               /*                     
+argocd-applicationset-controller.argocd.svc.cluster.local:7000            *                                                               /*                     
+5556                                                                      argocd-dex-server.argocd, 10.43.154.148                         /*                     
+argocd-repo-server.argocd.svc.cluster.local:8081                          *                                                               /*                     
+ext-auth-service.gloo-mesh-addons.svc.cluster.local:8082                  *                                                               /*                     
+9900                                                                      gloo-mesh-mgmt-server.gloo-mesh, 10.43.148.167                  /*                     
+5557                                                                      argocd-dex-server.argocd, 10.43.154.148                         /*                     
+20001                                                                     kiali.istio-system, 10.43.105.64                                /*                     
+8000                                                                      in-mesh.httpbin, 10.43.212.6                                    /*                     
+10101                                                                     gloo-mesh-ui.gloo-mesh, 10.43.13.114                            /*                     
+rate-limiter.gloo-mesh-addons.svc.cluster.local:8084                      *                                                               /*                     
+InboundPassthroughClusterIpv4                                             *                                                               /*                     
+InboundPassthroughClusterIpv6                                             *                                                               /*                     
+                                                                          *                                                               /healthz/ready*        
+InboundPassthroughClusterIpv6                                             *                                                               /*                     
+                                                                          *                                                               /stats/prometheus*     
+InboundPassthroughClusterIpv4                                             *                                                               /*                     
+inbound|9080||                                                            *                                                               /*                     
+inbound|9080||                                                            *                                                               /*                     
+
+RESOURCE NAME     TYPE           STATUS     VALID CERT     SERIAL NUMBER                               NOT AFTER                NOT BEFORE
+default           Cert Chain     ACTIVE     true           230735281241033303500494317937193620317     2022-06-16T03:43:02Z     2022-06-15T03:41:02Z
+ROOTCA            CA             ACTIVE     true           46136001239070144774084238468796660291      2032-06-12T03:40:58Z     2022-06-15T03:40:58Z
+```
+
+### Retrieve just the endpoint configuration
+```
+istioctl proxy-config endpoint -n bookinfo-frontends-foo productpage-v1-5f47bdf77b-5mstx
+```
+
+## Inspect bootstrap configuration
+```
+istioctl proxy-config bootstrap -n istio-gateways istio-ingressgateway-5d85f95f97-9kmb7
+```
+
+## Create an Istio Bug Report
+```
+% istioctl bug-report
+
+Target cluster context: mgmt
+
+Running with the following config: 
+
+istio-namespace: istio-system
+full-secrets: false
+timeout (mins): 30
+include: {  }
+exclude: { Namespaces: kube-node-lease,kube-public,kube-system,local-path-storage }
+end-time: 2022-06-14 21:07:16.697281 -0700 PDT
 
 
-## Lab 15 - Create the httpbin workspace <a name="Lab-15"></a>
+
+Cluster endpoint: https://0.0.0.0:56140
+CLI version:
+version.BuildInfo{Version:"1.14.1", GitRevision:"f59ce19ec6b63bbb70a65c43ac423845f1129464-dirty", GolangVersion:"go1.18.3", BuildStatus:"Clean", GitTag:"1.14.1"}
+
+The following Istio control plane revisions/versions were found in the cluster:
+Revision 1-13:
+&version.MeshInfo{
+    {
+        Component: "istiod",
+        Info:      version.BuildInfo{Version:"1.13.4", GitRevision:"solo-f83b36e42b76e12320f40a2e9526b444abb82e1e", GolangVersion:"", BuildStatus:"Clean", GitTag:"1.13.4"},
+    },
+}
+
+The following proxy revisions/versions were found in the cluster:
+Revision 1-13: Versions {1.13.4-solo}
+
+
+Fetching proxy logs for the following containers:
+
+argocd//argocd-application-controller-0/argocd-application-controller
+argocd/argocd-applicationset-controller/argocd-applicationset-controller-b48495b44-jjss7/argocd-applicationset-controller
+argocd/argocd-dex-server/argocd-dex-server-6b74fdb6f9-ptc48/dex
+argocd/argocd-notifications-controller/argocd-notifications-controller-c4c78f7f5-qtq2c/argocd-notifications-controller
+argocd/argocd-redis/argocd-redis-896595fb7-b26z5/redis
+argocd/argocd-repo-server/argocd-repo-server-764f599578-qfjxz/argocd-repo-server
+argocd/argocd-server/argocd-server-5475b57f89-nzbsc/argocd-extensions
+argocd/argocd-server/argocd-server-5475b57f89-nzbsc/argocd-server
+bookinfo-backends-foo/details-v1/details-v1-597f86fbdf-6wz97/details
+bookinfo-backends-foo/details-v1/details-v1-597f86fbdf-6wz97/istio-proxy
+bookinfo-backends-foo/ratings-v1/ratings-v1-bd7dc5bf7-j4ctx/istio-proxy
+bookinfo-backends-foo/ratings-v1/ratings-v1-bd7dc5bf7-j4ctx/ratings
+bookinfo-backends-foo/reviews-v1/reviews-v1-58f99b554c-bcqbl/istio-proxy
+bookinfo-backends-foo/reviews-v1/reviews-v1-58f99b554c-bcqbl/reviews
+bookinfo-backends-foo/reviews-v2/reviews-v2-57459866f5-gbpzt/istio-proxy
+bookinfo-backends-foo/reviews-v2/reviews-v2-57459866f5-gbpzt/reviews
+bookinfo-frontends-foo/productpage-v1/productpage-v1-5f47bdf77b-5mstx/istio-proxy
+bookinfo-frontends-foo/productpage-v1/productpage-v1-5f47bdf77b-5mstx/productpage
+cert-manager/cert-manager-cainjector/cert-manager-cainjector-b76f758d5-xss9f/cert-manager
+cert-manager/cert-manager-webhook/cert-manager-webhook-748b9fc4d6-4j8pp/cert-manager
+cert-manager/cert-manager/cert-manager-574d8cd496-rp5zs/cert-manager
+gloo-mesh-addons/ext-auth-service/ext-auth-service-68b64b4886-lkw5t/ext-auth-service
+gloo-mesh-addons/ext-auth-service/ext-auth-service-68b64b4886-lkw5t/istio-proxy
+gloo-mesh-addons/rate-limiter/rate-limiter-5d76cffd58-wqbsk/istio-proxy
+gloo-mesh-addons/rate-limiter/rate-limiter-5d76cffd58-wqbsk/rate-limiter
+gloo-mesh-addons/redis/redis-578865fd78-tj6dw/istio-proxy
+gloo-mesh-addons/redis/redis-578865fd78-tj6dw/redis
+gloo-mesh//svclb-gloo-mesh-mgmt-server-n2mvs/lb-tcp-8091
+gloo-mesh//svclb-gloo-mesh-mgmt-server-n2mvs/lb-tcp-9900
+gloo-mesh/gloo-mesh-agent/gloo-mesh-agent-5b6b6f55b-zlhcm/gloo-mesh-agent
+gloo-mesh/gloo-mesh-mgmt-server/gloo-mesh-mgmt-server-74c7cc8976-77l4g/gloo-mesh-mgmt-server
+gloo-mesh/gloo-mesh-redis/gloo-mesh-redis-5d694bdc9-x9886/gloo-mesh-redis
+gloo-mesh/gloo-mesh-ui/gloo-mesh-ui-5ccf6f44cc-gbjhn/console
+gloo-mesh/gloo-mesh-ui/gloo-mesh-ui-5ccf6f44cc-gbjhn/envoy
+gloo-mesh/gloo-mesh-ui/gloo-mesh-ui-5ccf6f44cc-gbjhn/gloo-mesh-ui
+gloo-mesh/gloo-mesh-ui/gloo-mesh-ui-5ccf6f44cc-gbjhn/istio-proxy
+gloo-mesh/prometheus-server/prometheus-server-59946649d9-qd4cp/prometheus-server
+gloo-mesh/prometheus-server/prometheus-server-59946649d9-qd4cp/prometheus-server-configmap-reload
+httpbin/in-mesh/in-mesh-755d9df68b-gm769/in-mesh
+httpbin/in-mesh/in-mesh-755d9df68b-gm769/istio-proxy
+istio-gateways//svclb-istio-eastwestgateway-shmm4/istio-proxy
+istio-gateways//svclb-istio-eastwestgateway-shmm4/lb-tcp-15012
+istio-gateways//svclb-istio-eastwestgateway-shmm4/lb-tcp-15017
+istio-gateways//svclb-istio-eastwestgateway-shmm4/lb-tcp-15021
+istio-gateways//svclb-istio-eastwestgateway-shmm4/lb-tcp-15443
+istio-gateways//svclb-istio-ingressgateway-t89xr/istio-proxy
+istio-gateways//svclb-istio-ingressgateway-t89xr/lb-tcp-443
+istio-gateways//svclb-istio-ingressgateway-t89xr/lb-tcp-80
+istio-gateways/istio-eastwestgateway/istio-eastwestgateway-65664978cf-zz9x7/istio-proxy
+istio-gateways/istio-ingressgateway/istio-ingressgateway-5d85f95f97-9kmb7/istio-proxy
+istio-system/grafana/grafana-5fb899f96-h7zj4/grafana
+istio-system/istiod-1-13/istiod-1-13-7c669c66d4-pj5jb/discovery
+istio-system/kiali/kiali-c9d6f75d5-nb79f/kiali
+istio-system/prometheus/prometheus-d7df8c957-zs9fz/prometheus-server
+istio-system/prometheus/prometheus-d7df8c957-zs9fz/prometheus-server-configmap-reload
+
+Running istio analyze on all namespaces and report as below:
+Analysis Report:
+Error [IST0101] (Gateway istio-gateways/eastwestgateway-istio-eastwestg-4642814fee7aeea0704cb53cbd1a247) Referenced selector not found: "app=istio-eastwestgateway,istio=eastwestgateway"
+Error [IST0101] (Gateway istio-gateways/virtualgateway-north-south-gw-4-ecda5acf626a08a019284efcf629e59) Referenced selector not found: "app=istio-ingressgateway,istio=ingressgateway"
+Error [IST0101] (Gateway istio-gateways/virtualgateway-north-south-gw-8-a816f0953c1deb14161a3e2a5be38d2) Referenced selector not found: "app=istio-ingressgateway,istio=ingressgateway"
+Info [IST0102] (Namespace cert-manager) The namespace is not enabled for Istio injection. Run 'kubectl label namespace cert-manager istio-injection=enabled' to enable it, or 'kubectl label namespace cert-manager istio-injection=disabled' to explicitly mark it as not needing injection.
+Info [IST0102] (Namespace default) The namespace is not enabled for Istio injection. Run 'kubectl label namespace default istio-injection=enabled' to enable it, or 'kubectl label namespace default istio-injection=disabled' to explicitly mark it as not needing injection.
+Info [IST0102] (Namespace gloo-mesh) The namespace is not enabled for Istio injection. Run 'kubectl label namespace gloo-mesh istio-injection=enabled' to enable it, or 'kubectl label namespace gloo-mesh istio-injection=disabled' to explicitly mark it as not needing injection.
+Info [IST0102] (Namespace httpbin) The namespace is not enabled for Istio injection. Run 'kubectl label namespace httpbin istio-injection=enabled' to enable it, or 'kubectl label namespace httpbin istio-injection=disabled' to explicitly mark it as not needing injection.
+Info [IST0118] (Service argocd/argocd-applicationset-controller) Port name metrics (port: 8080, targetPort: metrics) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service argocd/argocd-applicationset-controller) Port name webhook (port: 7000, targetPort: webhook) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service argocd/argocd-dex-server) Port name metrics (port: 5558, targetPort: 5558) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service argocd/argocd-metrics) Port name metrics (port: 8082, targetPort: 8082) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service argocd/argocd-notifications-controller-metrics) Port name metrics (port: 9001, targetPort: 9001) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service argocd/argocd-repo-server) Port name metrics (port: 8084, targetPort: 8084) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service argocd/argocd-repo-server) Port name server (port: 8081, targetPort: 8081) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service argocd/argocd-server-metrics) Port name metrics (port: 8083, targetPort: 8083) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service gloo-mesh-addons/ext-auth-service) Port name debug (port: 9091, targetPort: 9091) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service gloo-mesh-addons/ext-auth-service) Port name health (port: 8082, targetPort: 8082) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service gloo-mesh/gloo-mesh-agent) Port name stats (port: 9091, targetPort: 9091) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service gloo-mesh/gloo-mesh-mgmt-server) Port name healthcheck (port: 8091, targetPort: 8091) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service gloo-mesh/gloo-mesh-ui) Port name console (port: 8090, targetPort: 8090) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service gloo-mesh/gloo-mesh-ui) Port name healthcheck (port: 8081, targetPort: 8081) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service istio-system/grafana) Port name service (port: 3000, targetPort: 3000) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service gloo-mesh-addons/rate-limiter) Port name debug (port: 9091, targetPort: 9091) doesn't follow the naming convention of Istio port.
+Info [IST0118] (Service gloo-mesh-addons/rate-limiter) Port name ready (port: 8084, targetPort: 8084) doesn't follow the naming convention of Istio port.
+Info [IST0131] (VirtualService istio-gateways/routetable-gm-ui-rt-443-gloo-mesh-mgmt-gateways) VirtualService rule "gloo-mesh-ui-gm-ui-rt-443" match #1 of prefix /graph is not used (duplicate/overlapping match in rule #0 of prefix / on "gloo-mesh-ui-gm-ui-rt-443").
+Info [IST0131] (VirtualService istio-gateways/routetable-gm-ui-rt-443-gloo-mesh-mgmt-gateways) VirtualService rule "gloo-mesh-ui-gm-ui-rt-443" match #2 of prefix /gateways is not used (duplicate/overlapping match in rule #0 of prefix / on "gloo-mesh-ui-gm-ui-rt-443").
+Info [IST0131] (VirtualService istio-gateways/routetable-gm-ui-rt-443-gloo-mesh-mgmt-gateways) VirtualService rule "gloo-mesh-ui-gm-ui-rt-443" match #3 of prefix /policies is not used (duplicate/overlapping match in rule #0 of prefix / on "gloo-mesh-ui-gm-ui-rt-443").
+Creating an archive at /Users/alexly-solo/Desktop/solo/gloo-mesh-aoa/bug-report.tar.gz.
+Cleaning up temporary files in /var/folders/hv/638clk6n5tqg_7b4rxtf37tm0000gn/T/bug-report.
+Done.
+```
+
+See output named `bug-report.tar.gz`
+
+# istioctl experimental metrics
+
+[see link](https://istio.io/latest/docs/reference/commands/istioctl/#istioctl-experimental-metrics)
+This command finds a Prometheus pod running in the specified istio system namespace. It then executes a series of queries per requested workload to find the following top-level workload metrics: total requests per second, error rate, and request latency at p50, p90, and p99 percentiles. The query results are printed to the console, organized by workload name.
+```
+%   istioctl experimental metrics details-v1 -n bookinfo-backends-foo -d 5m
+WORKLOAD    TOTAL RPS    ERROR RPS  P50 LATENCY  P90 LATENCY  P99 LATENCY
+details-v1        0.954        0.000          2ms          4ms          4ms
+```
+
+## Lab 16 - Create the httpbin workspace <a name="Lab-16"></a>
 
 We're going to create a workspace for the team in charge of the httpbin application.
 
@@ -2883,7 +4260,7 @@ The Httpbin team has decided to export the following to the `gateway` workspace 
 
 
 
-## Lab 16 - Expose an external service <a name="Lab-16"></a>
+## Lab 17 - Expose an external service <a name="Lab-17"></a>
 
 In this step, we're going to expose an external service through a Gateway using Gloo Mesh and show how we can then migrate this service to the Mesh.
 
