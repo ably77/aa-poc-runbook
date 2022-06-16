@@ -2609,7 +2609,7 @@ Run the following commands to initiate a communication from a service which isn'
 
 With Sleep App:
 ```
-kubectl exec -it -n sleep deploy/sleep-not-in-mesh -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
+kubectl --context ${CLUSTER1} exec -it -n sleep deploy/sleep-not-in-mesh -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
 ```
 
 With Ephemeral Containers:
@@ -2641,7 +2641,7 @@ Run the following commands to initiate a communication from a service which is i
 
 With Sleep App:
 ```
-kubectl exec -it -n sleep deploy/sleep-in-mesh -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
+kubectl --context ${CLUSTER1} exec -it -n sleep deploy/sleep-in-mesh -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
 ```
 
 With Ephemeral Containers:
