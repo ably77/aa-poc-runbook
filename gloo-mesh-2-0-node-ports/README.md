@@ -4471,10 +4471,178 @@ This diagram shows the flow of the requests :
 
 ## Lab 18 - Exposing the Gloo Mesh UI <a name="Lab-18"></a>
 
+### Create the Admin Workspace and WorkspaceSettings
+First we are going to create a new workspace that we will name the Admin Workspace. In this workspace we will put management tools such as the gloo-mesh namespace (or in future tools like argocd, for example)
+
+```
+kubectl apply --context ${MGMT} -f- <<EOF
+apiVersion: admin.gloo.solo.io/v2
+kind: Workspace
+metadata:
+  labels:
+    allow_ingress: "true"
+  name: admin-workspace
+  namespace: gloo-mesh
+spec:
+  workloadClusters:
+  - name: mgmt
+    namespaces:
+    - name: gloo-mesh
+---
+apiVersion: admin.gloo.solo.io/v2
+kind: WorkspaceSettings
+metadata:
+  name: admin-workspace-settings
+  namespace: gloo-mesh
+spec:
+  exportTo:
+  - resources:
+    - kind: ALL
+      labels:
+        expose: "true"
+    - kind: SERVICE
+      labels:
+        app: gloo-mesh-ui
+    workspaces:
+    workspaces:
+    - name: gateways
+  importFrom:
+  - resources:
+    - kind: SERVICE
+    workspaces:
+    - name: gateways
+  options:
+    federation:
+      enabled: true
+      hostSuffix: global
+EOF
+```
+
 ### Using External Service
 By default the Gloo Mesh UI is deployed with `serviceType: LoadBalancer` because it is not deployed as part of the mesh. In our case we have configured the Gloo Mesh UI to be a NodePort. Either way, the service is on a cluster without a mesh and would be considered as an External Service. 
 
-(Will work on an example of this when I get back from vacation but this should be similar to Lab 17)
+```
+% k get svc -n gloo-mesh
+NAME                    TYPE           CLUSTER-IP     EXTERNAL-IP      PORT(S)                                         AGE
+gloo-mesh-mgmt-server   LoadBalancer   10.56.6.93     34.71.115.32     8091:32259/TCP,9900:30240/TCP                   37m
+gloo-mesh-redis         ClusterIP      10.56.0.14     <none>           6379/TCP                                        37m
+gloo-mesh-ui            LoadBalancer   10.56.15.220   35.184.204.197   10101:32188/TCP,8090:31528/TCP,8081:31037/TCP   37m
+prometheus-server       ClusterIP      10.56.7.195    <none>           80/TCP                                          37m
+```
+
+To interact with a service outside of the mesh we will use the ExternalEndpoint and ExternalService CRDs. First we can create our External Endpoint
+```
+kubectl apply --context ${MGMT} -f- <<EOF
+apiVersion: networking.gloo.solo.io/v2
+kind: ExternalEndpoint
+metadata:
+  name: gmui-ext-endpoint
+  namespace: gloo-mesh
+  labels:
+    # Label that the external service will select
+    external-endpoint: gmui
+spec:
+  # Static IP address for external service
+  # This is the address of the LoadBalancer enabled Gloo Mesh UI
+  address: 35.184.204.197
+  ports:
+    - name: console
+      number: 8090
+```
+
+Next we can create our ExternalService
+```
+kubectl apply --context ${MGMT} -f- <<EOF
+apiVersion: networking.gloo.solo.io/v2
+kind: ExternalService
+metadata:
+  name: gmui-extservice
+  namespace: gloo-mesh
+  labels:
+    expose: "true"
+spec:
+  hosts:
+  - 'gmui.external.com'
+  ports:
+  - name: console
+    number: 8090
+    protocol: TCP
+  selector:
+    external-endpoint: gmui
+EOF
+```
+
+Since our currently configured gateway currently has a listener on port 443 for our Bookinfo example, lets create a new listener on port 80 on cluster1:
+```
+kubectl apply --context ${CLUSTER1} -f- <<EOF
+apiVersion: networking.gloo.solo.io/v2
+kind: VirtualGateway
+metadata:
+  name: cluster1-north-south-gw-80
+  namespace: istio-gateways
+spec:
+  listeners:
+  - http: {}
+    port:
+      number: 80
+  workloads:
+  - selector:
+      cluster: cluster1
+      labels:
+        istio: ingressgateway
+EOF
+```
+
+Now we can apply a new route table for the Gloo Mesh UI which fowards to our External Service
+```
+kubectl apply --context ${MGMT} -f- <<EOF
+apiVersion: networking.gloo.solo.io/v2
+kind: RouteTable
+metadata:
+  labels:
+    expose: "true"
+  name: gm-ui-rt-80
+  namespace: gloo-mesh
+spec:
+  hosts:
+  - 'gmui.external.com'
+  - '*'
+  http:
+  - forwardTo:
+      destinations:
+      - kind: EXTERNAL_SERVICE
+        port:
+          number: 8090
+        ref:
+          name: gmui-extservice
+          namespace: gloo-mesh
+          cluster: mgmt
+    labels:
+      waf: "true"
+    name: gloo-mesh-ui
+    matchers:
+    - uri:
+        prefix: /
+    - uri:
+        prefix: /graph
+    - uri:
+        prefix: /gateways
+    - uri:
+        prefix: /policies
+    - uri:
+        prefix: /oidc-callback
+    - uri:
+        prefix: /logout
+  virtualGateways:
+  - cluster: cluster1
+    name: cluster1-north-south-gw-80
+    namespace: istio-gateways
+  workloadSelectors: []
+EOF
+```
+
+We should now be able to access our Gloo Mesh UI at port 80 of the cluster1 ingressgateway!
+
 
 ### Exposing the Gloo Mesh UI with Istio Ingress Gateway
 We can also take the approach of deploying Istio on our management cluster and registering it to Gloo Mesh. By bringing the Gloo Mesh UI into the mesh, we can access the dashboard through the east/west gateway on the management cluster, while exposing it on our cluster1 gateway. 
@@ -4660,51 +4828,6 @@ spec:
     namespaces:
     - name: istio-gateways
     - name: gloo-mesh-addons
-EOF
-```
-
-### Create the Admin Workspace and WorkspaceSettings
-```
-kubectl apply --context ${MGMT} -f- <<EOF
-apiVersion: admin.gloo.solo.io/v2
-kind: Workspace
-metadata:
-  labels:
-    allow_ingress: "true"
-  name: admin-workspace
-  namespace: gloo-mesh
-spec:
-  workloadClusters:
-  - name: mgmt
-    namespaces:
-    - name: gloo-mesh
----
-apiVersion: admin.gloo.solo.io/v2
-kind: WorkspaceSettings
-metadata:
-  name: admin-workspace-settings
-  namespace: gloo-mesh
-spec:
-  exportTo:
-  - resources:
-    - kind: ALL
-      labels:
-        expose: "true"
-    - kind: SERVICE
-      labels:
-        app: gloo-mesh-ui
-    workspaces:
-    workspaces:
-    - name: gateways
-  importFrom:
-  - resources:
-    - kind: SERVICE
-    workspaces:
-    - name: gateways
-  options:
-    federation:
-      enabled: true
-      hostSuffix: global
 EOF
 ```
 
