@@ -31,6 +31,8 @@ source ./scripts/assert.sh
 * [Lab 15 - Exploring Istio, Envoy Proxy Config, and Metrics](#Lab-15)
 * [Lab 16 - Create the httpbin workspace](#Lab-16)
 * [Lab 17 - Expose an external service](#Lab-17)
+* [Lab 18 - Exposing the Gloo Mesh UI](#Lab-18)
+
 
 
 
@@ -4464,4 +4466,310 @@ If you refresh your browser, you should see that you get responses only from the
 
 This diagram shows the flow of the requests :
 
-![Gloo Mesh Gateway EXternal Service](images/steps/gateway-external-service/gloo-mesh-gateway-external-service.svg)
+![Gloo Mesh Gateway External Service](images/steps/gateway-external-service/gloo-mesh-gateway-external-service.svg)
+
+
+## Lab 18 - Exposing the Gloo Mesh UI <a name="Lab-18"></a>
+
+### Using External Service
+By default the Gloo Mesh UI is deployed with `serviceType: LoadBalancer` because it is not deployed as part of the mesh. In our case we have configured the Gloo Mesh UI to be a NodePort. Either way, the service is on a cluster without a mesh and would be considered as an External Service. 
+
+(Will work on an example of this when I get back from vacation but this should be similar to Lab 17)
+
+### Exposing the Gloo Mesh UI with Istio Ingress Gateway
+We can also take the approach of deploying Istio on our management cluster and registering it to Gloo Mesh. By bringing the Gloo Mesh UI into the mesh, we can access the dashboard through the east/west gateway on the management cluster, while exposing it on our cluster1 gateway. 
+
+First we will deploy Istio on our management cluster
+```
+kubectl --context ${MGMT} create ns istio-system
+kubectl --context ${MGMT} create ns istio-gateways
+
+helm --kube-context=${MGMT} upgrade --install istio-base ./istio-1.13.4/manifests/charts/base -n istio-system --set defaultRevision=1-13
+
+helm --kube-context=${MGMT} upgrade --install istio-1.13.4 ./istio-1.13.4/manifests/charts/istio-control/istio-discovery -n istio-system --values - <<EOF
+revision: 1-13
+global:
+  meshID: mesh1
+  multiCluster:
+    clusterName: mgmt
+  network: network1
+  hub: us-docker.pkg.dev/gloo-mesh/istio-workshops
+  tag: 1.13.4-solo
+meshConfig:
+  trustDomain: mgmt
+  accessLogFile: /dev/stdout
+  enableAutoMtls: true
+  defaultConfig:
+    envoyMetricsService:
+      address: gloo-mesh-agent.gloo-mesh:9977
+    envoyAccessLogService:
+      address: gloo-mesh-agent.gloo-mesh:9977
+    proxyMetadata:
+      ISTIO_META_DNS_CAPTURE: "true"
+      ISTIO_META_DNS_AUTO_ALLOCATE: "true"
+      GLOO_MESH_CLUSTER_NAME: mgmt
+pilot:
+  env:
+    PILOT_ENABLE_K8S_SELECT_WORKLOAD_ENTRIES: "false"
+    PILOT_SKIP_VALIDATE_TRUST_DOMAIN: "true"
+EOF
+```
+
+Next we will just deploy the Istio east/west gateway to the mgmt cluster:
+```
+kubectl --context ${MGMT} label namespace istio-gateways istio.io/rev=1-13
+
+helm --kube-context=${MGMT} upgrade --install istio-eastwestgateway ./istio-1.13.4/manifests/charts/gateways/istio-ingress -n istio-gateways --values - <<EOF
+global:
+  hub: us-docker.pkg.dev/gloo-mesh/istio-workshops
+  tag: 1.13.4-solo
+gateways:
+  istio-ingressgateway:
+    name: istio-eastwestgateway
+    namespace: istio-gateways
+    labels:
+      istio: eastwestgateway
+      topology.istio.io/network: network1
+    injectionTemplate: gateway
+    type: NodePort
+    ports:
+    - name: tcp-status-port
+      port: 15021
+      targetPort: 15021
+    - name: tls
+      port: 15443
+      targetPort: 15443
+    - name: tcp-istiod
+      port: 15012
+      targetPort: 15012
+    - name: tcp-webhook
+      port: 15017
+      targetPort: 15017
+    env:
+      ISTIO_META_ROUTER_MODE: "sni-dnat"
+      ISTIO_META_REQUESTED_NETWORK_VIEW: "network1"
+EOF
+```
+
+If needed again, grab the endpoint of the Gloo Mesh UI:
+```
+export ENDPOINT_GLOO_MESH=$(kubectl --context ${MGMT} get nodes -o jsonpath='{.items[0].status.addresses[?(.type=="InternalIP")].address}'):$(kubectl --context ${MGMT} -n gloo-mesh get svc gloo-mesh-mgmt-server -o jsonpath='{.spec.ports[?(@.port==9900)].nodePort}')
+```
+
+Now we can register the agent on the mgmt cluster
+```
+helm repo add gloo-mesh-agent https://storage.googleapis.com/gloo-mesh-enterprise/gloo-mesh-agent
+helm repo update
+
+kubectl apply --context ${MGMT} -f- <<EOF
+apiVersion: admin.gloo.solo.io/v2
+kind: KubernetesCluster
+metadata:
+  name: mgmt
+  namespace: gloo-mesh
+spec:
+  clusterDomain: cluster.local
+EOF
+
+helm upgrade --install gloo-mesh-agent gloo-mesh-agent/gloo-mesh-agent \
+  --namespace gloo-mesh \
+  --kube-context=${MGMT} \
+  --set relay.serverAddress=${ENDPOINT_GLOO_MESH} \
+  --set relay.authority=gloo-mesh-mgmt-server.gloo-mesh \
+  --set rate-limiter.enabled=false \
+  --set ext-auth-service.enabled=false \
+  --set cluster=mgmt \
+  --version 2.0.5
+```
+
+### Update Gloo Mesh Helm 
+
+Save this as a values.yaml, keep the commented out sections as we may use those later
+```
+licenseKey: <INSERT_LICENSE_KEY_HERE>
+mgmtClusterName: mgmt
+glooMeshMgmtServer:
+  ports:
+    healthcheck: 8091
+  serviceType: NodePort
+glooMeshUi:
+  enabled: true
+  serviceType: NodePort
+  #auth:
+  #  enabled: true
+  #  backend: oidc
+  #  oidc: 
+  #    # From the OIDC provider
+  #    clientId: "<client_id>"
+  #    # From the OIDC provider. To be base64 encoded and stored as a kubernetes secret.
+  #    clientSecret: "<client_secret>"
+  #    # Name for generated secret
+  #    clientSecretName: dashboard
+  #    # The issuer URL from the OIDC provider, usually something like 'https://<domain>.<provider_url>/'.
+  #    issuerUrl: <issuer_url>
+  #    # The URL that the UI for the OIDC app is available at, from the DNS and other ingress settings that expose the OIDC app UI service.
+  #    appUrl: "<app_url>"
+  #
+  # if cluster is istio enabled we can also add the dashboard into the mesh
+  deploymentOverrides:
+    spec:
+      template:
+        metadata:
+          annotations:
+            sidecar.istio.io/inject: "true"
+          labels:
+            istio.io/rev: "1-13"
+```
+
+Now upgrade Gloo Mesh
+```
+helm upgrade --install gloo-mesh-enterprise gloo-mesh-enterprise/gloo-mesh-enterprise -n gloo-mesh --version=2.0.5 --values=values.yaml --context ${MGMT}
+```
+
+Now that we have injected the gloo-mesh-ui with a sidecar, we should be able to see this reflected as `4/4` READY pods. If not just delete the pod so it re-deploys with one
+```
+% k get pods -n gloo-mesh
+NAME                                     READY   STATUS    RESTARTS      AGE
+gloo-mesh-redis-5d694bdc9-8cqx8          1/1     Running   0             60m
+gloo-mesh-mgmt-server-6c66ddd7c8-jjddg   1/1     Running   0             60m
+prometheus-server-59946649d9-2gcgx       2/2     Running   0             60m
+gloo-mesh-agent-598bc58db9-7xbjv         1/1     Running   1 (58m ago)   59m
+gloo-mesh-ui-54c67b5bc6-bwv5n            4/4     Running   1 (56m ago)   56m
+```
+
+### Create the Admin Workspace and WorkspaceSettings
+```
+kubectl apply --context ${MGMT} -f- <<EOF
+apiVersion: admin.gloo.solo.io/v2
+kind: Workspace
+metadata:
+  labels:
+    allow_ingress: "true"
+  name: admin-workspace
+  namespace: gloo-mesh
+spec:
+  workloadClusters:
+  - name: mgmt
+    namespaces:
+    - name: gloo-mesh
+---
+apiVersion: admin.gloo.solo.io/v2
+kind: WorkspaceSettings
+metadata:
+  name: admin-workspace-settings
+  namespace: gloo-mesh
+spec:
+  exportTo:
+  - resources:
+    - kind: ALL
+      labels:
+        expose: "true"
+    - kind: SERVICE
+      labels:
+        app: gloo-mesh-ui
+    workspaces:
+    workspaces:
+    - name: gateways
+  importFrom:
+  - resources:
+    - kind: SERVICE
+    workspaces:
+    - name: gateways
+  options:
+    federation:
+      enabled: true
+      hostSuffix: global
+EOF
+```
+
+### Create a Virtual Gateway on port 80 on cluster1
+Here we are creating a new Gateway with a listener on port 80, since our existing Gateway is only mapped to 443
+```
+kubectl apply --context ${CLUSTER1} -f- <<EOF
+apiVersion: networking.gloo.solo.io/v2
+kind: VirtualGateway
+metadata:
+  name: cluster1-north-south-gw-80
+  namespace: istio-gateways
+spec:
+  listeners:
+  - http: {}
+    port:
+      number: 80
+  workloads:
+  - selector:
+      cluster: cluster1
+      labels:
+        istio: ingressgateway
+EOF
+```
+
+### Create our Virtual Destination and Route Table
+```
+apiVersion: networking.gloo.solo.io/v2
+kind: RouteTable
+metadata:
+  labels:
+    expose: "true"
+  name: gm-ui-rt-443
+  namespace: gloo-mesh
+spec:
+  hosts:
+  - '*'
+  http:
+  - forwardTo:
+      destinations:
+      - kind: VIRTUAL_DESTINATION
+        port:
+          number: 8090
+        ref:
+          cluster: mgmt
+          name: gm-ui-vd
+          namespace: gloo-mesh
+    name: gloo-mesh-ui
+    matchers:
+    - uri:
+        prefix: /
+    - uri:
+        prefix: /graph
+    - uri:
+        prefix: /gateways
+    - uri:
+        prefix: /policies
+    - uri:
+        prefix: /oidc-callback
+    - uri:
+        prefix: /logout
+  virtualGateways:
+  - cluster: cluster1
+    name: cluster1-north-south-gw-80
+    namespace: istio-gateways
+  workloadSelectors: []
+---
+apiVersion: networking.gloo.solo.io/v2
+kind: VirtualDestination
+metadata:
+  labels:
+    expose: "true"
+  name: gm-ui-vd
+  namespace: gloo-mesh
+spec:
+  hosts:
+  - gm-ui.mgmt.global
+  ports:
+  - number: 8090
+    protocol: HTTP
+  services:
+  - cluster: mgmt
+    labels:
+      app: gloo-mesh-ui
+    namespace: gloo-mesh
+```
+
+We should now be able to access our Gloo Mesh UI at port 80 of the cluster1 ingressgateway
+```
+ENDPOINT_HTTP_GW_CLUSTER1=$(kubectl --context ${CLUSTER1} get nodes -o jsonpath='{.items[0].status.addresses[?(.type=="InternalIP")].address}'):$(kubectl --context ${CLUSTER1} -n istio-gateways get svc istio-ingressgateway -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}')
+
+echo "http://${ENDPOINT_HTTP_GW_CLUSTER1}"
+```
+
