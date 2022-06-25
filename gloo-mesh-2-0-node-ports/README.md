@@ -31,7 +31,8 @@ source ./scripts/assert.sh
 * [Lab 15 - Exploring Istio, Envoy Proxy Config, and Metrics](#Lab-15)
 * [Lab 16 - Create the httpbin workspace](#Lab-16)
 * [Lab 17 - Expose an external service](#Lab-17)
-* [Lab 18 - Exposing the Gloo Mesh UI](#Lab-18)
+* [Lab 18a - Exposing the Gloo Mesh UI with External Service](#Lab-18a)
+* [Lab 18b - (Bonus) Exposing the Gloo Mesh UI with Istio on mgmt cluster](#Lab-18a)
 
 
 
@@ -4469,11 +4470,26 @@ This diagram shows the flow of the requests :
 ![Gloo Mesh Gateway External Service](images/steps/gateway-external-service/gloo-mesh-gateway-external-service.svg)
 
 
-## Lab 18 - Exposing the Gloo Mesh UI <a name="Lab-18"></a>
+## Lab 18a - Exposing the Gloo Mesh UI with External Service <a name="Lab-18a"></a>
+By default the Gloo Mesh UI is deployed with `serviceType: LoadBalancer` because it is not deployed as part of the mesh. In our case we have configured the Gloo Mesh UI to be a NodePort. Either way, the service is on a cluster without a mesh and would be considered as an External Service. gloo-mesh-ui would have 4/4 ready pods if it were a part of a mesh with a sidecar
+```
+% k get pods -n gloo-mesh
+NAME                                     READY   STATUS    RESTARTS      AGE
+gloo-mesh-mgmt-server-59b74f87ff-nwxv7   1/1     Running   1 (54m ago)   55m
+gloo-mesh-redis-5d694bdc9-6prw8          1/1     Running   0             55m
+gloo-mesh-ui-57bd4dbd95-lwg4h            3/3     Running   0             55m
+prometheus-server-59946649d9-m9fkk       2/2     Running   0             55m
+
+% k get svc -n gloo-mesh
+NAME                    TYPE           CLUSTER-IP     EXTERNAL-IP      PORT(S)                                         AGE
+gloo-mesh-mgmt-server   LoadBalancer   10.56.6.93     34.71.115.32     8091:32259/TCP,9900:30240/TCP                   37m
+gloo-mesh-redis         ClusterIP      10.56.0.14     <none>           6379/TCP                                        37m
+gloo-mesh-ui            LoadBalancer   10.56.15.220   35.184.204.197   10101:32188/TCP,8090:31528/TCP,8081:31037/TCP   37m
+prometheus-server       ClusterIP      10.56.7.195    <none>           80/TCP                                          37m
+```
 
 ### Create the Admin Workspace and WorkspaceSettings
 First we are going to create a new workspace that we will name the Admin Workspace. In this workspace we will put management tools such as the gloo-mesh namespace (or in future tools like argocd, for example)
-
 ```
 kubectl apply --context ${MGMT} -f- <<EOF
 apiVersion: admin.gloo.solo.io/v2
@@ -4519,17 +4535,6 @@ EOF
 ```
 
 ### Using External Service
-By default the Gloo Mesh UI is deployed with `serviceType: LoadBalancer` because it is not deployed as part of the mesh. In our case we have configured the Gloo Mesh UI to be a NodePort. Either way, the service is on a cluster without a mesh and would be considered as an External Service. 
-
-```
-% k get svc -n gloo-mesh
-NAME                    TYPE           CLUSTER-IP     EXTERNAL-IP      PORT(S)                                         AGE
-gloo-mesh-mgmt-server   LoadBalancer   10.56.6.93     34.71.115.32     8091:32259/TCP,9900:30240/TCP                   37m
-gloo-mesh-redis         ClusterIP      10.56.0.14     <none>           6379/TCP                                        37m
-gloo-mesh-ui            LoadBalancer   10.56.15.220   35.184.204.197   10101:32188/TCP,8090:31528/TCP,8081:31037/TCP   37m
-prometheus-server       ClusterIP      10.56.7.195    <none>           80/TCP                                          37m
-```
-
 To interact with a service outside of the mesh we will use the ExternalEndpoint and ExternalService CRDs. First we can create our External Endpoint
 ```
 kubectl apply --context ${MGMT} -f- <<EOF
@@ -4548,6 +4553,7 @@ spec:
   ports:
     - name: console
       number: 8090
+EOF
 ```
 
 Next we can create our ExternalService
@@ -4561,12 +4567,14 @@ metadata:
   labels:
     expose: "true"
 spec:
+  # Arbitrary, internal-only hostname assigned to the endpoint
   hosts:
   - 'gmui.external.com'
   ports:
   - name: console
     number: 8090
     protocol: TCP
+  # Selects the endpoint label
   selector:
     external-endpoint: gmui
 EOF
@@ -4604,9 +4612,12 @@ metadata:
   name: gm-ui-rt-80
   namespace: gloo-mesh
 spec:
+  # Wildcard applies to any host; can indicate a specific host such as below
   hosts:
   - 'gmui.external.com'
   - '*'
+  # Route for the db-external-service
+  # Reference to the external service exposing your external endpoints
   http:
   - forwardTo:
       destinations:
@@ -4617,8 +4628,6 @@ spec:
           name: gmui-extservice
           namespace: gloo-mesh
           cluster: mgmt
-    labels:
-      waf: "true"
     name: gloo-mesh-ui
     matchers:
     - uri:
@@ -4633,6 +4642,7 @@ spec:
         prefix: /oidc-callback
     - uri:
         prefix: /logout
+  # Selects the virtual gateway you previously created
   virtualGateways:
   - cluster: cluster1
     name: cluster1-north-south-gw-80
@@ -4644,7 +4654,7 @@ EOF
 We should now be able to access our Gloo Mesh UI at port 80 of the cluster1 ingressgateway!
 
 
-### Exposing the Gloo Mesh UI with Istio Ingress Gateway
+## Lab 18b - (Bonus) Exposing the Gloo Mesh UI with Istio on mgmt cluster <a name="Lab-18b"></a>
 We can also take the approach of deploying Istio on our management cluster and registering it to Gloo Mesh. By bringing the Gloo Mesh UI into the mesh, we can access the dashboard through the east/west gateway on the management cluster, while exposing it on our cluster1 gateway. 
 
 First we will deploy Istio on our management cluster
