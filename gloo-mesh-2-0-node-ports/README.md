@@ -4623,7 +4623,7 @@ glooMeshUi:
 
 Now upgrade Gloo Mesh
 ```
-helm upgrade --install gloo-mesh-enterprise gloo-mesh-enterprise/gloo-mesh-enterprise -n gloo-mesh --version=2.0.5 --values=values.yaml --context ${MGMT}
+helm --kube-context ${MGMT} upgrade --install gloo-mesh-enterprise gloo-mesh-enterprise/gloo-mesh-enterprise -n gloo-mesh --version=2.0.5 --values=values.yaml
 ```
 
 Now that we have injected the gloo-mesh-ui with a sidecar, we should be able to see this reflected as `4/4` READY pods. If not just delete the pod so it re-deploys with one
@@ -4635,6 +4635,32 @@ gloo-mesh-mgmt-server-6c66ddd7c8-jjddg   1/1     Running   0             60m
 prometheus-server-59946649d9-2gcgx       2/2     Running   0             60m
 gloo-mesh-agent-598bc58db9-7xbjv         1/1     Running   1 (58m ago)   59m
 gloo-mesh-ui-54c67b5bc6-bwv5n            4/4     Running   1 (56m ago)   56m
+```
+
+### Update the Gateways WorkspaceSettings with your mgmt cluster
+Add our mgmt cluster gateways to the gateways workspace so that the east/west gateway can be discovered in the management cluster 
+```
+kubectl apply --context ${MGMT} -f- <<EOF
+apiVersion: admin.gloo.solo.io/v2
+kind: Workspace
+metadata:
+  name: gateways
+  namespace: gloo-mesh
+spec:
+  workloadClusters:
+  - name: cluster1
+    namespaces:
+    - name: istio-gateways
+    - name: gloo-mesh-addons
+  - name: cluster2
+    namespaces:
+    - name: istio-gateways
+    - name: gloo-mesh-addons
+  - name: mgmt
+    namespaces:
+    - name: istio-gateways
+    - name: gloo-mesh-addons
+EOF
 ```
 
 ### Create the Admin Workspace and WorkspaceSettings
@@ -4706,6 +4732,7 @@ EOF
 
 ### Create our Virtual Destination and Route Table
 ```
+kubectl apply --context ${MGMT} -f- <<EOF
 apiVersion: networking.gloo.solo.io/v2
 kind: RouteTable
 metadata:
@@ -4764,6 +4791,7 @@ spec:
     labels:
       app: gloo-mesh-ui
     namespace: gloo-mesh
+EOF
 ```
 
 We should now be able to access our Gloo Mesh UI at port 80 of the cluster1 ingressgateway
@@ -4772,4 +4800,3 @@ ENDPOINT_HTTP_GW_CLUSTER1=$(kubectl --context ${CLUSTER1} get nodes -o jsonpath=
 
 echo "http://${ENDPOINT_HTTP_GW_CLUSTER1}"
 ```
-
