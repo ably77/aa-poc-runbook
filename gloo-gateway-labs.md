@@ -571,7 +571,7 @@ spec:
       cluster: cluster1
     ratelimitServerConfig:
       name: httpbin
-      namespace: httpbin
+      namespace: gloo-mesh-addons
       cluster: cluster1
     phase:
       postAuthz:
