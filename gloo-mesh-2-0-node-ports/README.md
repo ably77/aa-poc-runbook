@@ -1993,7 +1993,7 @@ To do that, the Bookinfo team must update the `WorkspaceSettings` to discover al
 
 Before doing so, you should take note of what Gloo Mesh is doing under the hood. First take a look at the existing serviceentries, we should expect to not see any output
 ```
-kubectl get serviceentries -A --context {CLUSTER1}
+kubectl get serviceentries -A --context ${CLUSTER1}
 ```
 
 ```bash
