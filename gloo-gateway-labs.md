@@ -62,6 +62,29 @@ helm upgrade --install gloo-mesh-agent-addons gloo-mesh-agent/gloo-mesh-agent \
   --version 2.0.15
 ```
 
+If this is the first time deploying the `gloo-mesh-addons` we will need to update the gateways Workspace to include the gloo-mesh-addons namespace
+```
+kubectl apply --context ${MGMT} -f- <<EOF
+apiVersion: admin.gloo.solo.io/v2
+kind: Workspace
+metadata:
+  name: gateways
+  namespace: gloo-mesh
+spec:
+  workloadClusters:
+  - name: cluster1
+    namespaces:
+    - name: istio-gateways
+    # uncomment if gloo-mesh-addons are deployed
+    - name: gloo-mesh-addons
+  - name: cluster2
+    namespaces:
+    - name: istio-gateways
+    # uncomment if gloo-mesh-addons are deployed
+    - name: gloo-mesh-addons
+EOF
+```
+
 Finally, you need to specify which gateways you want to use for cross cluster traffic:
 
 ```bash
