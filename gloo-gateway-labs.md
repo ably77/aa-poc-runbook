@@ -502,7 +502,7 @@ apiVersion: admin.gloo.solo.io/v2
 kind: RateLimitServerConfig
 metadata:
   name: httpbin
-  namespace: httpbin
+  namespace: gloo-mesh-addons
 spec:
   destinationServers:
   - ref:
