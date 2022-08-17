@@ -287,7 +287,7 @@ data:
 
     allow {
         [header, payload, signature] = io.jwt.decode(input.state.jwt)
-        endswith(payload["email"], "@solo.io")
+        endswith(payload["sub"], "@alaskaair.com")
     }
 EOF
 ```
@@ -338,35 +338,8 @@ spec:
           query: "data.alaska.allow == true"
 EOF
 ```
-Now we should see success when logging in with a username that ends with `@solo.io` but will encounter a `403 Error - You don't have authorization to view this page` when using a username that ends with anything else (`@gmail.com` for example)
+Now we should see success when logging in with a username that ends with `@alaskaair.com`
 
-### Expand to other email suffixes
-We can expand on our example to accept users with `@gmail.com` email claim by modifying the rego rule
-```bash
-kubectl --context ${CLUSTER1} apply -f - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: httpbin-opa
-  namespace: httpbin
-data:
-  policy.rego: |-
-    package alaska
-
-    default allow = false
-
-    allow {
-        [header, payload, signature] = io.jwt.decode(input.state.jwt)
-        endswith(payload["email"], "@solo.io")
-    }
-    allow {
-        [header, payload, signature] = io.jwt.decode(input.state.jwt)
-        endswith(payload["email"], "@gmail.com")
-    }
-EOF
-```
-
-Now you should be able to access the app logging in with users that end in `@gmail.com` as well as `@solo.io`
 
 ### Use OPA to enforce a specific HTTP method
 Let's continue to expand on our example by enforcing different HTTP methods for our two types of users
@@ -385,24 +358,7 @@ data:
 
     allow {
         [header, payload, signature] = io.jwt.decode(input.state.jwt)
-        endswith(payload["email"], "@solo.io")
-        any({input.http_request.method == "GET",
-             input.http_request.method == "POST",
-             input.http_request.method == "PUT",
-             input.http_request.method == "DELETE",
-    })
-    }
-    allow {
-        [header, payload, signature] = io.jwt.decode(input.state.jwt)
-        endswith(payload["email"], "@gmail.com")
-        any({input.http_request.method == "POST",
-             input.http_request.method == "PUT",
-             input.http_request.method == "DELETE",
-    })
-    }
-    allow {
-        [header, payload, signature] = io.jwt.decode(input.state.jwt)
-        endswith(payload["sub"], "@hc.ge.com")
+        endswith(payload["sub"], "@alaskaair.com")
         any({input.http_request.method == "POST",
              input.http_request.method == "PUT",
              input.http_request.method == "DELETE",
@@ -411,7 +367,7 @@ data:
 EOF
 ```
 
-If you refresh the browser where the `@gmail.com` user is logged in, we should now see a `403 Error - You don't have authorization to view this page`. This is because we are not allowing the `GET` method for either of those matches in our OPA policy
+If you refresh the browser where the `@alaskaair.com` user is logged in, we should now see a `403 Error - You don't have authorization to view this page`. This is because we are not allowing the `GET` method for either of those matches in our OPA policy
 
 Let's fix that
 ```bash
@@ -429,16 +385,7 @@ data:
 
     allow {
         [header, payload, signature] = io.jwt.decode(input.state.jwt)
-        endswith(payload["email"], "@solo.io")
-        any({input.http_request.method == "GET",
-             input.http_request.method == "POST",
-             input.http_request.method == "PUT",
-             input.http_request.method == "DELETE",
-    })
-    }
-    allow {
-        [header, payload, signature] = io.jwt.decode(input.state.jwt)
-        endswith(payload["email"], "@gmail.com")
+        endswith(payload["sub"], "@alaskaair.com")
         any({input.http_request.method == "GET",
              input.http_request.method == "POST",
              input.http_request.method == "PUT",
@@ -469,7 +416,7 @@ data:
 
     allow {
         [header, payload, signature] = io.jwt.decode(input.state.jwt)
-        endswith(payload["email"], "@solo.io")
+        endswith(payload["sub"], "@alaskaair.com")
         any({input.http_request.path == "/get",
         startswith(input.http_request.path, "/anything")
     })
@@ -479,21 +426,9 @@ data:
              input.http_request.method == "DELETE",
     })
     }
-    allow {
-        [header, payload, signature] = io.jwt.decode(input.state.jwt)
-        endswith(payload["email"], "@gmail.com")
-        input.http_request.path == "/anything/protected"
-        any({input.http_request.method == "GET",
-             input.http_request.method == "POST",
-             input.http_request.method == "PUT",
-             input.http_request.method == "DELETE",
-    })
-    }
 EOF
 ```
 If you refresh the browser where the `@solo.io` user is logged in, we should be able to access the `/get` endpoint as well as any path with the prefix `/anything`. Try and access `/anything/foo` for example - it should work.
-
-If you refresh the browser where the `@gmail.com` user is logged in, we should now see a `403 Error - You don't have authorization to view this page` if you access anything other than the `/anything/protected` endpoint
 
 ## Lab 4 - Apply rate limiting to the Gateway <a name="Lab-4"></a>
 In this step, we're going to apply rate limiting to the Gateway to only allow 3 requests per minute for the users of the `solo.io` organization.
