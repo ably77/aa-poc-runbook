@@ -5,8 +5,5 @@ kind: Kustomization
 # list of resources to be Applied
 resources:
 - gloo-mesh-gateways-workspace.yaml
-- gloo-mesh-gateways-workspacesettings.yaml
 - gloo-mesh-global-workspacesettings.yaml
 - gloo-mesh-mgmt-extauth-server.yaml
-- gloo-mesh-mgmt-virtualgateway-80.yaml
-- gloo-mesh-mgmt-virtualgateway-443.yaml
