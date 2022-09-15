@@ -823,6 +823,7 @@ kubectl --context ${MGMT} create ns gloo-mesh
 helm upgrade --install gloo-mesh-enterprise gloo-mesh-enterprise/gloo-mesh-enterprise \
 --namespace gloo-mesh --kube-context ${MGMT} \
 --version=2.1.0-beta27 \
+--set global.cluster=mgmt \
 --set glooMeshMgmtServer.ports.healthcheck=8091 \
 --set glooMeshMgmtServer.serviceType=NodePort \
 --set glooMeshUi.serviceType=NodePort \
