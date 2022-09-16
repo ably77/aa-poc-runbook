@@ -17,7 +17,7 @@ echo "now curling reviews from sleep-not-in-mesh"
 echo "using command: kubectl exec -it -n sleep deploy/sleep-not-in-mesh -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0 "
 echo
 echo "expected output: 200 status code:"
-kubectl exec -it -n sleep deploy/sleep-not-in-mesh -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
+kubectl exec -it -n sleep deploy/sleep-not-in-mesh --context ${cluster1_context} -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
 
 # applying zero trust
 echo
@@ -34,7 +34,7 @@ echo "now curling reviews from sleep-not-in-mesh"
 echo "using command: kubectl exec -it -n sleep deploy/sleep-not-in-mesh -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0 "
 echo
 echo "expected output: 000 status code:"
-kubectl exec -it -n sleep deploy/sleep-not-in-mesh -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
+kubectl exec -it -n sleep deploy/sleep-not-in-mesh --context ${cluster1_context} -- curl -s -o /dev/null -w "%{http_code}" http://reviews.bookinfo-backends.svc.cluster.local:9080/reviews/0
 
 echo
 echo "now reverting back to default workspace settings"
