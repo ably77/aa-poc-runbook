@@ -1,0 +1,17 @@
+name: istio-ingressgateway-1-17
+global:
+  hub: us-docker.pkg.dev/gloo-mesh/istio-workshops
+  tag: 1.17.3-solo
+labels:
+  app: gloo-gateway
+service:
+  type: ClusterIP
+  ports:
+  # main http ingress port
+  - port: 80
+    targetPort: 8080
+    name: http2
+  # main https ingress port
+  - port: 443
+    targetPort: 8443
+    name: https

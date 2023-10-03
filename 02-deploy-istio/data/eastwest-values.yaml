@@ -1,0 +1,25 @@
+name: istio-eastwestgateway
+global:
+  hub: us-docker.pkg.dev/gloo-mesh/istio-workshops
+  tag: 1.17.3-solo
+labels:
+  topology.istio.io/network: istio-network
+  app: gloo-internal-gateway
+service:
+  type: LoadBalancer
+  ports:
+  - name: tls
+    port: 15443
+    targetPort: 15443
+  - name: https
+    port: 16443
+    targetPort: 16443
+  - name: tls-istiod
+    port: 15012
+    targetPort: 15012
+    nodePort: 30012
+env:
+  # Required for Gloo multi-cluster routing
+  ISTIO_META_ROUTER_MODE: "sni-dnat"
+  # used for VM integration
+  ISTIO_META_REQUESTED_NETWORK_VIEW: istio-network

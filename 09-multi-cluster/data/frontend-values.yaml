@@ -1,0 +1,40 @@
+clusterName: 'leaf1'
+endpoints:
+  productCatalogService: 'product-catalog.app-team.tcb.mesh:80'
+  currencyService: 'currency.app-team.tcb.mesh:80'
+  recommendationService: 'recommendations.app-team.tcb.mesh:80'
+  shippingService: 'shipping.checkout-team.tcb.mesh:80'
+  checkoutService: 'checkout.checkout-team.tcb.mesh:80'
+  adService: 'ads.app-team.tcb.mesh:80'
+images:
+  repository: us-central1-docker.pkg.dev/field-engineering-us/online-boutique
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "1.8"
+serviceAccounts:
+  # Specifies whether service accounts should be created.
+  create: true
+frontend:
+  create: true
+loadGenerator:
+  create: true
+adService:
+  create: false
+cartService:
+  create: true
+checkoutService:
+  create: false
+currencyService:
+  create: true
+emailService:
+  create: true
+paymentService:
+  create: false
+productCatalogService:
+  create: true
+recommendationService:
+  create: true
+shippingService:
+  create: false
+cartDatabase:
+  inClusterRedis:
+    create: true

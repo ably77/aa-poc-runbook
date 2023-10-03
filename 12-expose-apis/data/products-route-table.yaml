@@ -1,0 +1,25 @@
+apiVersion: networking.gloo.solo.io/v2
+kind: RouteTable
+metadata:
+  name: productcatalog
+  namespace: app-team
+spec:
+  weight: 100
+  workloadSelectors: []
+  http:
+    - matchers:
+      - uri:
+          exact: /products
+      - uri:
+          prefix: /products
+      name: products
+      labels:
+        route: products
+      forwardTo:
+        destinations:
+          - ref:
+              name: productcatalogservice
+              namespace: online-boutique
+              cluster: leaf1
+            port:
+              number: 3555

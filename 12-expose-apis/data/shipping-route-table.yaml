@@ -1,0 +1,23 @@
+apiVersion: networking.gloo.solo.io/v2
+kind: RouteTable
+metadata:
+  name: shipping
+  namespace: app-team
+spec:
+  weight: 100
+  workloadSelectors: []
+  http:
+    - matchers:
+      - uri:
+          prefix: /shipping
+      name: shipping
+      labels:
+        route: shipping
+      forwardTo:
+        destinations:
+          - ref:
+              name: shipping
+              namespace: checkout-team
+            kind: VIRTUAL_DESTINATION
+            port:
+              number: 81

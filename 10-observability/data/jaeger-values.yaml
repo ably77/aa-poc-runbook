@@ -1,0 +1,14 @@
+provisionDataStore:
+  cassandra: false
+tag: 1.45.0
+allInOne:
+  enabled: true
+  image: jaegertracing/all-in-one
+storage:
+  type: none
+agent:
+  enabled: false
+collector:
+  enabled: false
+query:
+  enabled: false

@@ -1,0 +1,106 @@
+apiVersion: admin.gloo.solo.io/v2
+kind: GatewayLifecycleManager
+metadata:
+  name: istio-ingressgateway
+  namespace: gloo-mesh
+spec:
+  installations:
+      # The revision for this installation, such as 1-14
+    - gatewayRevision: 1-17
+      # List all workload clusters to install Istio into
+      clusters:
+      - name: leaf1
+        # If set to true, the spec for this revision is applied in the cluster
+        activeGateway: true
+      istioOperatorSpec:
+        # No control plane components are installed
+        profile: empty
+        # Solo.io Istio distribution repository; required for Gloo Istio.
+        # You get the repo key from your Solo Account Representative.
+        hub: us-docker.pkg.dev/gloo-mesh/istio-workshops
+        # The Solo.io Gloo Istio tag
+        tag: 1.17.3-solo
+        values:
+          gateways:
+            istio-ingressgateway:
+              injectionTemplate: gateway
+          global:
+            network: istio-network
+        components:
+          ingressGateways:
+          # Enable the default ingress gateway
+            - name: istio-ingressgateway
+              # Deployed to gloo-mesh-gateways by default
+              namespace: istio-ingress
+              enabled: true
+              label:
+                app: gloo-gateway
+                revision: 1-17
+              k8s:
+                service:
+                  type: LoadBalancer
+                  # Default ports
+                  ports:
+                    # Main HTTP ingress port
+                    - port: 80
+                      targetPort: 8080
+                      name: http2
+                    # Main HTTPS ingress port
+                    - port: 443
+                      targetPort: 8443
+                      name: https
+---
+apiVersion: admin.gloo.solo.io/v2
+kind: GatewayLifecycleManager
+metadata:
+  name: istio-eastwestgateway
+  namespace: gloo-mesh
+spec:
+  installations:
+      # The revision for this installation, such as 1-14
+    - gatewayRevision: 1-17
+      # List all workload clusters to install Istio into
+      clusters:
+      - name: leaf1
+        # If set to true, the spec for this revision is applied in the cluster
+        activeGateway: true
+      - name: leaf2
+        activeGateway: true
+      istioOperatorSpec:
+        # No control plane components are installed
+        profile: empty
+        # Solo.io Istio distribution repository; required for Gloo Istio.
+        # You get the repo key from your Solo Account Representative.
+        hub: us-docker.pkg.dev/gloo-mesh/istio-workshops
+        # The Solo.io Gloo Istio tag
+        tag: 1.17.3-solo
+        components:
+          ingressGateways:
+          # Enable the default east-west gateway
+            - name: istio-eastwestgateway
+              # Deployed to gloo-mesh-gateways by default
+              namespace: istio-eastwest
+              enabled: true
+              label:
+                app: gloo-internal-gateway
+                revision: 1-17
+                topology.istio.io/network: istio-network
+              k8s:
+                env:
+                  # sni-dnat adds the clusters required for AUTO_PASSTHROUGH mode
+                  # Required by Gloo for east-west routing
+                  - name: ISTIO_META_ROUTER_MODE
+                    value: "sni-dnat"
+                service:
+                  type: LoadBalancer
+                  # Default ports
+                  ports:
+                    # Port for multicluster mTLS passthrough
+                    # Required for Gloo east/west routing
+                    - port: 15443
+                      targetPort: 15443
+                      # Gloo looks for this default name 'tls' on a gateway
+                      name: tls
+                    - name: tls-istiod
+                      port: 15012
+                      targetPort: 15012

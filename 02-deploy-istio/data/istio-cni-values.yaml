@@ -1,0 +1,13 @@
+cni:
+  hub: us-docker.pkg.dev/gloo-mesh/istio-workshops
+  tag: 1.17.3-solo
+# Revision is set as 'version' label and part of the resource names when installing multiple control planes.
+revision: 1-17
+global:
+  # Default hub for Istio images.
+  # Releases are published to docker hub under 'istio' project.
+  # Dev builds from prow are on gcr.io
+  hub: us-docker.pkg.dev/gloo-mesh/istio-workshops
+  # Default tag for Istio images.
+  tag: 1.17.3-solo
+  logAsJson: true

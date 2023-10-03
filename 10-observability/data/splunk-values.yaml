@@ -1,0 +1,31 @@
+# Optional customization for the Gloo Platform Telemetry Collector.
+telemetryGatewayCustomization:
+  extraExporters:
+    otlp/tracing:
+      endpoint: jaeger-collector.gloo-mesh.svc.cluster.local:4317
+      tls:
+        insecure: true
+    splunk_hec/gloo-mesh:
+      token: "<SPLUNK_TOKEN>"
+      endpoint: "https://<SPLUNK_SERVER>:8088/services/collector"
+      source: "otel"
+      sourcetype: "otel"
+      index: "main"
+      max_connections: 20
+      disable_compression: false
+      timeout: 10s
+      tls:
+        insecure_skip_verify: true
+  extraPipelines:
+    logs/splunk:
+      receivers:
+      - otlp
+      processors: []
+      exporters: 
+      - splunk_hec/gloo-mesh
+    traces/splunk:
+      receivers:
+      - otlp
+      processors: []
+      exporters: 
+      - splunk_hec/gloo-mesh

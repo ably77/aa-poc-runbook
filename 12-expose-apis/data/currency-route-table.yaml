@@ -1,0 +1,25 @@
+apiVersion: networking.gloo.solo.io/v2
+kind: RouteTable
+metadata:
+  name: currency
+  namespace: app-team
+spec:
+  weight: 100
+  workloadSelectors: []
+  http:
+    - matchers:
+      - uri:
+          exact: /currencies
+      - uri:
+          prefix: /currencies
+      name: currency
+      labels:
+        route: currency
+      forwardTo:
+        destinations:
+          - ref:
+              name: currencyservice
+              namespace: online-boutique
+              cluster: leaf1
+            port:
+              number: 7005

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: online-boutique 
+  labels:
+    istio.io/rev: 1-17
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: checkout-apis 
+  labels:
+    istio.io/rev: 1-17

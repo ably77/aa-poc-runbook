@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-setup
+  namespace: vault
+---
+# bitnami/kubectl:latest
+apiVersion: v1
+kind: Pod
+metadata:
+  name:  vault-setup
+  namespace: vault
+  labels:
+    app: vault-setup
+spec:
+  serviceAccountName: vault-setup
+  containers:
+    - command:
+        - sleep
+        - 20h
+      image: hashicorp/vault:1.13.1
+      name: vault-setup

@@ -1,0 +1,29 @@
+# Configuration for the Gloo agent.
+glooAgent:
+  enabled: true
+  image:
+    # Image registry.
+    registry: gcr.io/gloo-mesh
+    repository: gloo-mesh-agent
+    tag: 2.4.2
+  relay:
+    # SNI name in the authority/host header used to connect to relay forwarding server. Must match server certificate CommonName. Do not change the default value.
+    authority: "gloo-mesh-mgmt-server.gloo-mesh"
+# Configuration for the Gloo Platform Telemetry Collector. See the [OpenTelemetry Helm chart](https://github.com/open-telemetry/opentelemetry-helm-charts/blob/main/charts/opentelemetry-collector/values.yaml) for the complete set of values.
+telemetryCollector:
+  enabled: true
+  image:
+    repository: gcr.io/gloo-mesh/gloo-otel-collector
+    tag: 2.4.2
+# Optional customization for the Gloo Platform Telemetry Collector.
+telemetryCollectorCustomization:
+  serverName: "gloo-telemetry-gateway.gloo-mesh"
+  extraPipelines:
+    traces/gloo-mesh: 
+      receivers: [zipkin/gloo-mesh]
+      processors: [batch]
+      exporters:
+        - otlp
+  extraReceivers:
+    zipkin/gloo-mesh:
+        endpoint: 0.0.0.0:9411

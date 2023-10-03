@@ -1,0 +1,22 @@
+apiVersion: networking.gloo.solo.io/v2
+kind: RouteTable
+metadata:
+  name: external-service
+  namespace: app-team
+spec:
+  workloadSelectors: []
+  http:
+    - matchers:
+      - uri:
+          prefix: /get
+      name: external-service
+      labels:
+        route: external
+      forwardTo:
+        destinations:
+          - kind: EXTERNAL_SERVICE
+            ref:
+              name: external-service
+              namespace: app-team
+              cluster: management
+---

@@ -1,0 +1,75 @@
+global:
+  hub: us-docker.pkg.dev/gloo-mesh/istio-workshops
+  tag: 1.17.3-solo
+meshConfig:
+  # The trust domain corresponds to the trust root of a system. 
+  # For Gloo this should be the name of the cluster that cooresponds with the CA certificate CommonName identity
+  trustDomain: cluster.local
+  # Enable access logging only if using.
+  accessLogFile: /dev/stdout
+  # Encoding for the proxy access log (TEXT or JSON). Default value is TEXT.
+  accessLogEncoding: JSON
+  defaultConfig:
+    # wait for the istio-proxy to start before application pods
+    holdApplicationUntilProxyStarts: true
+    proxyMetadata:
+      # Enable Istio agent to handle DNS requests for known hosts
+      # Unknown hosts will automatically be resolved using upstream dns servers in resolv.conf
+      # (for proxy-dns)
+      ISTIO_META_DNS_CAPTURE: "true"
+      # Enable automatic address allocation (for proxy-dns)
+      ISTIO_META_DNS_AUTO_ALLOCATE: "true"
+    tracing:
+      max_path_tag_length: 256
+      custom_tags:
+        clusterID:
+          environment:
+            name: ISTIO_META_CLUSTER_ID
+  enableTracing: true
+  extensionProviders:
+    - name: zipkincustom
+      zipkin:
+        service: "gloo-telemetry-collector.gloo-mesh.svc.cluster.local"
+        port: "9411"
+    - name: envoyOtelAls
+      envoyOtelAls:
+        service: "gloo-telemetry-collector.gloo-mesh.svc.cluster.local"
+pilot:
+  env:
+    # Allow multiple trust domains (Required for Gloo east/west routing)
+    PILOT_SKIP_VALIDATE_TRUST_DOMAIN: "true"
+    # Reload cacerts when cert-manager changes it
+    AUTO_RELOAD_PLUGIN_CERTS: "true"
+    # Disable selecting workload entries for local service routing.
+    # Required for Gloo VirtualDestinaton functionality.
+    PILOT_ENABLE_K8S_SELECT_WORKLOAD_ENTRIES: "false"
+values:
+  global:
+    meshID: mesh1
+    network: "istio-network"
+# Traffic management
+components:
+  pilot:
+    k8s:
+      # Recommended to be >1 in production
+      replicaCount: 1
+      # The Istio load tests mesh consists of 1000 services and 2000 sidecars with 70,000 mesh-wide requests per second and Istiod used 1 vCPU and 1.5 GB of memory (1.10.3).
+      resources:
+        requests:
+          cpu: 200m
+          memory: 500Mi
+        limits:
+          cpu: 2000m
+      env:
+      # Disable selecting workload entries for local service routing.
+      # Required for Gloo VirtualDestinaton functionality.
+      - name: PILOT_ENABLE_K8S_SELECT_WORKLOAD_ENTRIES
+        value: "false"
+      # Virtual Machine registration
+      - name: PILOT_ENABLE_WORKLOAD_ENTRY_AUTOREGISTRATION
+        value: "true"
+      # Virtual Machine health checks
+      - name: PILOT_ENABLE_WORKLOAD_ENTRY_HEALTHCHECKS
+        value: "true"
+      - name: PILOT_FILTER_GATEWAY_CLUSTER_CONFIG
+        value: "true"

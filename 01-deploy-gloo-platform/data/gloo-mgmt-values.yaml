@@ -1,0 +1,86 @@
+common:
+  # Name of the cluster. Be sure to modify this value to match your cluster's name.
+  cluster: "management"
+# Configuration for the Gloo management server.
+glooMgmtServer:
+  enabled: true
+  serviceType: LoadBalancer
+  image:
+    registry: gcr.io/gloo-mesh
+    repository: gloo-mesh-mgmt-server
+    tag: 2.4.2
+  relay:
+    # Push RBAC resources to the management server. Required for multicluster RBAC in the Gloo UI.
+    pushRbac: true
+# Configuration for the Gloo UI.
+glooUi:
+  enabled: true
+  image:
+    registry: gcr.io/gloo-mesh
+    repository: gloo-mesh-apiserver
+    tag: 2.4.2
+  sidecars:
+    console:
+      # Container image.
+      image:
+        # Image registry.
+        registry: gcr.io/gloo-mesh
+        # Image name (repository).
+        repository: gloo-mesh-ui
+        # Version tag for the container image.
+        tag: 2.4.2
+    envoy:
+      # Container image.
+      image:
+        # Image registry.
+        registry: gcr.io/gloo-mesh
+        # Image name (repository).
+        repository: gloo-mesh-envoy
+        # Version tag for the container image.
+        tag: 2.4.2
+# Gloo Platform Redis configuration options.
+redis:
+  deployment:
+    enabled: true
+    image:
+      # Image registry.
+      registry: docker.io
+      repository: redis
+      tag: 7.0.11-alpine
+# Helm values for configuring Prometheus. See the [Prometheus Helm chart](https://github.com/prometheus-community/helm-charts/blob/main/charts/prometheus/values.yaml) for the complete set of values.
+prometheus:
+  enabled: true
+  server:
+    image:
+      # Image registry.
+      registry: quay.io/prometheus/prometheus
+      tag: v2.45.0
+# OTLP collector for workload cluster collectors
+telemetryGateway:
+  enabled: true
+  image:
+    repository: gcr.io/gloo-mesh/gloo-otel-collector
+    tag: 2.4.2
+  service:
+    type: LoadBalancer
+# Optional customization for the Gloo Platform Telemetry Collector.
+telemetryGatewayCustomization:
+  extraExporters:
+    otlp/tracing:
+      endpoint: gloo-jaeger-collector.gloo-mesh.svc.cluster.local:4317
+      tls:
+        insecure: true
+  extraPipelines:
+    traces/gloo-mesh:
+      receivers:
+      - otlp
+      processors: 
+      - batch
+      exporters: 
+      - otlp/tracing
+# Configuration for the Gloo Platform Jaeger instance. See the [Jaeger Helm chart](https://github.com/jaegertracing/helm-charts/blob/main/charts/jaeger/values.yaml) for the complete set of values.
+jaeger:
+  enabled: true
+demo:
+  # Enable tracing demo configuration. Jaeger should also be enabled under 'jaeger.enabled' during mgmt cluster installation.
+  tracingEnabled: true

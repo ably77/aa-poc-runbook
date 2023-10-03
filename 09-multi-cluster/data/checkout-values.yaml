@@ -1,0 +1,21 @@
+# Default values for onlineboutique.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+clusterName: 'leaf2'
+endpoints:
+  productCatalogService: 'product-catalog.app-team.tcb.mesh:80'
+  currencyService: 'currency.app-team.tcb.mesh:80'
+  cartService: 'cart.app-team.tcb.mesh:80'
+images:
+  repository: us-central1-docker.pkg.dev/field-engineering-us/online-boutique
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "1.8"
+serviceAccounts:
+  # Specifies whether service accounts should be created.
+  create: true
+shippingService:
+  create: true
+checkoutService:
+  create: true
+paymentService:
+  create: true

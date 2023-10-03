@@ -1,0 +1,7 @@
+productCatalogService:
+  create: true
+  catalog: "toys"
+  # appens the catalog to all names to create unique k8s objects
+  includeCatalogSelector: true
+  service:
+    create: false

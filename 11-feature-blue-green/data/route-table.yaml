@@ -1,0 +1,29 @@
+apiVersion: networking.gloo.solo.io/v2
+kind: RouteTable
+metadata:
+  name: product-catalog
+  namespace: app-team
+spec:
+  hosts:
+    - product-catalog.app-team.tcb.mesh
+  workloadSelectors:
+  - selector:
+      # applies to all workloads in the app-team workspace
+      workspace: app-team
+  - selector:
+      # applies to all workloads in the checkout-team workspace
+      workspace: checkout-team
+  http:
+    ## Where normal traffic should go
+    - name: catalog-default
+      forwardTo:
+        destinations:
+          - kind: VIRTUAL_DESTINATION
+            ref:
+              name: product-catalog
+              namespace: app-team
+              cluster: management
+            port: 
+              number: 80
+            subset:
+              catalog: clothes

@@ -1,0 +1,41 @@
+apiVersion: admin.gloo.solo.io/v2
+kind: Workspace
+metadata:
+  name: ops-team
+  namespace: gloo-mesh
+spec:
+  workloadClusters:
+  # administrative namespace
+  - name: management
+    namespaces:
+    - name: ops-team
+  # remote cluster namespaces
+  - name: '*'
+    namespaces:
+    - name: istio-ingress
+    - name: istio-eastwest
+    - name: gloo-platform-addons
+---
+# workspace configuration
+apiVersion: admin.gloo.solo.io/v2
+kind: WorkspaceSettings
+metadata:
+  name: ops-team
+  # placed in the administrative namespace
+  namespace: ops-team
+spec:
+  # import service discovery from app-team
+  importFrom:
+  - workspaces:
+    - name: app-team
+    - name: checkout-team
+  # export service discovery to any workspace that needs ingress
+  exportTo:
+  - workspaces:
+    - name: "*"
+  # for mutli cluster routing
+  options:
+    eastWestGateways:
+    - selector:
+        labels:
+          app: gloo-internal-gateway

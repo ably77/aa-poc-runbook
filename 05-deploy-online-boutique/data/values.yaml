@@ -1,0 +1,25 @@
+clusterName: 'leaf1'
+images:
+  repository: us-central1-docker.pkg.dev/field-engineering-us/online-boutique
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "1.8"
+serviceAccounts:
+  # Specifies whether service accounts should be created.
+  create: true
+frontend:
+  create: true
+loadGenerator:
+  create: true
+cartService:
+  create: true
+currencyService:
+  create: true
+emailService:
+  create: true
+productCatalogService:
+  create: true
+recommendationService:
+  create: true
+cartDatabase:
+  inClusterRedis:
+    create: true

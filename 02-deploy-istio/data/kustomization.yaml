@@ -1,0 +1,4 @@
+resources:
+- base.yaml
+patchesStrategicMerge:
+- ./data/istio-csr-patch.yaml

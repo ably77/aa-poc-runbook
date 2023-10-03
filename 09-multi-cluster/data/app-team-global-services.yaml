@@ -1,0 +1,95 @@
+apiVersion: networking.gloo.solo.io/v2
+kind: VirtualDestination
+metadata:
+  name: currency
+spec:
+  hosts:
+  - currency.app-team.tcb.mesh
+  services:
+  - labels:
+      app: currencyservice
+  ports:
+  - number: 81
+    protocol: HTTP
+    targetPort:
+      name: http
+  - number: 80
+    protocol: GRPC
+    targetPort:
+      name: grpc
+---
+apiVersion: networking.gloo.solo.io/v2
+kind: VirtualDestination
+metadata:
+  name: product-catalog
+spec:
+  hosts:
+  - product-catalog.app-team.tcb.mesh
+  services:
+  - labels:
+      app: productcatalogservice
+  ports:
+  - number: 81
+    protocol: HTTP
+    targetPort:
+      name: http
+  - number: 80
+    protocol: GRPC
+    targetPort:
+      name: grpc
+---
+apiVersion: networking.gloo.solo.io/v2
+kind: VirtualDestination
+metadata:
+  name: cart
+spec:
+  hosts:
+  - cart.app-team.tcb.mesh
+  services:
+  - labels:
+      app: cartservice
+  ports:
+  - number: 80
+    protocol: GRPC
+    targetPort:
+      name: grpc
+---
+apiVersion: networking.gloo.solo.io/v2
+kind: VirtualDestination
+metadata:
+  name: recommendations
+spec:
+  hosts:
+  - recommendations.app-team.tcb.mesh
+  services:
+  - labels:
+      app: recommendationservice
+  ports:
+  - number: 81
+    protocol: HTTP
+    targetPort:
+      name: http
+  - number: 80
+    protocol: GRPC
+    targetPort:
+      name: grpc
+---
+apiVersion: networking.gloo.solo.io/v2
+kind: VirtualDestination
+metadata:
+  name: email
+spec:
+  hosts:
+  - email.app-team.tcb.mesh
+  services:
+  - labels:
+      app: emailservice
+  ports:
+  - number: 81
+    protocol: HTTP
+    targetPort:
+      name: http
+  - number: 80
+    protocol: GRPC
+    targetPort:
+      name: grpc
