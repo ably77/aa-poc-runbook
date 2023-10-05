@@ -22,7 +22,7 @@ Gloo Platform uses a root trust policy to configure the relay server (gloo-mesh-
 ![Istio Certificates](images/istio-certificates.svg)
 ## Gloo Platform Managed
 
-* Fully managed option - Gloo Platform will generate a new Root CA and Intermediates for each clusers Istio deployments
+* Fully managed option - Gloo Platform will generate a new Root CA and Intermediates for each clusters Istio deployments
 ```shell
 kubectl apply --context management -f - <<EOF
 apiVersion: admin.gloo.solo.io/v2
@@ -34,6 +34,24 @@ spec:
   config:
     mgmtServerCa:
       generated: {}
+    autoRestartPods: true
+EOF
+```
+
+* Secret Reference - Gloo Platform will use provided Root CA and generate Intermediates for each clusters Istio deployments
+```shell
+kubectl apply --context management -f - <<EOF
+apiVersion: admin.gloo.solo.io/v2
+kind: RootTrustPolicy
+metadata:
+  name: root-trust-policy
+  namespace: gloo-mesh
+spec:
+  config:
+    mgmtServerCa:
+      secretRef:
+        name: $provided_cert_name
+        namespace: gloo-mesh
     autoRestartPods: true
 EOF
 ```
